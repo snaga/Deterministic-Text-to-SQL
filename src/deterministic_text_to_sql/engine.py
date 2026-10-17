@@ -360,7 +360,7 @@ class DeterministicTextToSQLEngine:
             # 4. HITL Ambiguity Check (unless bypassed by force=True)
             if not force:
                 hitl_issue = self._hitl_manager.check_ambiguity(
-                    slots, clarification=effective_clarify
+                    slots, clarification=effective_clarify, schema=self._schema
                 )
                 if hitl_issue is not None:
                     # Ensure base_query is accurately populated
