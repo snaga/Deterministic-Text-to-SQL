@@ -120,6 +120,7 @@
 3. **超低遅延パイプライン (Sub-100ms Latency)**: Jev API（<30ms）＋ グラフ探索（<1ms）＋ ASTコンパイル（<3ms）により、全体レイテンシを100ms未満で処理する。
 4. **Human-in-the-Loop ファースト (HITL by Design)**: 曖昧性があるときは無理に推測せず、ユーザーに選択肢を提示して安全に確定させる。
 5. **将来のMCP化を見据えた脱結合 (MCP-Ready Decoupled Architecture)**: CLI表示層とコアロジックを厳格に分離し、コアエンジン `DeterministicTextToSQLEngine` は純粋Pythonオブジェクトとしてあらゆるクライアント（CLI / MCP Server / FastAPI / Python SDK）から再利用可能にする。
+6. **責務の分離とDB直接実行の排除 (Separation of Concerns)**: 本エンジンおよびCLIはSQLの合成・コンパイルと構造化出力に専念し、データベースへのクエリ直接実行機能（`--execute` 等）は持たない。DB実行は上位のDBクライアントやエージェントの実行ツールに委ねることで、接続認証情報の管理やセキュリティリスクを構造的に排除する。
 
 ### 全体構成図
 以下の図は、入力された自然言語クエリが各コンポーネントを経て型安全なSQLへコンパイルされる静的構成と依存関係を示しています。CLIと将来のMCPサーバーの双方が同一のコアエンジンを利用可能な構造です。
@@ -154,7 +155,7 @@ graph TD
     JevClient -.->|HTTP Keep-Alive <30ms| JevAPI
     SQLBuilder -->|Transpiled SQL| Engine
     Engine --> CLI
-    CLI -->|実行または出力| DB
+    CLI --> Output["📄 フォーマット済みSQL / 構造化JSON"]
 ```
 
 ### レイヤー構造
@@ -225,11 +226,10 @@ TyperおよびRichによる対話的CLIツールを提供します。
   - `--dialect` (str, デフォルト: `postgres`): SQLダイアレクト (`postgres`, `duckdb`, `sqlite`, `snowflake`, `bigquery`)
   - `--clarify` (str, オプション): HITL選択補足キー (`A`, `B` 等)
   - `--json` (bool, デフォルト: `False`): JSON形式での結果出力
-  - `--execute` (bool, デフォルト: `False`): 生成SQLを接続先DBで即座に実行
 - **処理概要**:
   1. クエリ文字列をパースし、必要に応じてJev APIを呼び出す。
   2. 曖昧性がある場合はHITL画面（またはJSON）を出力しステータスコード2で一時停止。
-  3. 確定IntentからFKグラフ探索とASTビルドを行い、SQLを表示/実行する。
+  3. 確定IntentからFKグラフ探索とASTビルドを行い、SQLを表示・出力する（DB実行は行わず責務を分離）。
 - **出力**:
   - コンソール表示（Richカラーフォーマット）または構造化JSON（`latency_ms`, `intent`, `sql`, `hitl_summary`）
 
