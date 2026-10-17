@@ -318,56 +318,60 @@ def parse_jev_response(
                 if bound:
                     break
 
-    # 7.3 Numeric Literal Filter Extraction
-    # If the query contains numeric thresholds (e.g. "1000以上", "< 500")
-    numeric_values = extract_numeric_literals(query)
-    # Filter out ranking numbers like top 5 or top 10
-    if ranking == "top_5" and 5.0 in numeric_values:
-        numeric_values.remove(5.0)
-    elif ranking == "top_10" and 10.0 in numeric_values:
-        numeric_values.remove(10.0)
+    # 7.3 Numeric Literal Filter Extraction (fallback if no numeric filter already provided)
+    has_numeric_filter = any(
+        isinstance(fs.value, (int, float)) and fs.operator in (">=", "<=", ">", "<", "=")
+        for fs in filter_slots
+    )
+    if not has_numeric_filter:
+        numeric_values = extract_numeric_literals(query)
+        # Filter out ranking numbers like top 5 or top 10
+        if ranking == "top_5" and 5.0 in numeric_values:
+            numeric_values.remove(5.0)
+        elif ranking == "top_10" and 10.0 in numeric_values:
+            numeric_values.remove(10.0)
 
-    if numeric_values:
-        threshold = numeric_values[0]
-        # Determine operator from keywords in query
-        if any(kw in query for kw in [">=", "以上", "at least", "より多い"]):
-            operator = ">="
-        elif any(kw in query for kw in ["<=", "以下", "at most", "未満でない"]):
-            operator = "<="
-        elif any(kw in query for kw in [">", "超", "より大きい", "greater than"]):
-            operator = ">"
-        elif any(kw in query for kw in ["<", "未満", "より小さい", "less than"]):
-            operator = "<"
-        else:
-            operator = "="
+        if numeric_values:
+            threshold = numeric_values[0]
+            # Determine operator from keywords in query
+            if any(kw in query for kw in [">=", "以上", "at least", "より多い"]):
+                operator = ">="
+            elif any(kw in query for kw in ["<=", "以下", "at most", "未満でない"]):
+                operator = "<="
+            elif any(kw in query for kw in [">", "超", "より大きい", "greater than"]):
+                operator = ">"
+            elif any(kw in query for kw in ["<", "未満", "より小さい", "less than"]):
+                operator = "<"
+            else:
+                operator = "="
 
-        # Target column determination based on table / metric
-        num_table = primary_table
-        num_column = "o_totalprice" if primary_table == "orders" else "s_acctbal"
-        if primary_table == "customer":
-            num_column = "c_acctbal"
-        elif primary_table == "lineitem":
-            num_column = "l_extendedprice"
+            # Target column determination based on table / metric
+            num_table = primary_table
+            num_column = "o_totalprice" if primary_table == "orders" else "s_acctbal"
+            if primary_table == "customer":
+                num_column = "c_acctbal"
+            elif primary_table == "lineitem":
+                num_column = "l_extendedprice"
 
-        # Verify column exists if schema is provided
-        if schema is not None:
-            tbl_meta = schema.get_table(num_table)
-            if tbl_meta and tbl_meta.get_column(num_column) is None:
-                # Find any metric column
-                for c in tbl_meta.columns:
-                    if c.role == "metric":
-                        num_column = c.name
-                        break
+            # Verify column exists if schema is provided
+            if schema is not None:
+                tbl_meta = schema.get_table(num_table)
+                if tbl_meta and tbl_meta.get_column(num_column) is None:
+                    # Find any metric column
+                    for c in tbl_meta.columns:
+                        if c.role == "metric":
+                            num_column = c.name
+                            break
 
-        filter_slots.append(
-            FilterSlot(
-                table=num_table,
-                column=num_column,
-                operator=operator,
-                value=threshold,
-                display_label=f"{num_table}.{num_column} {operator} {threshold}",
+            filter_slots.append(
+                FilterSlot(
+                    table=num_table,
+                    column=num_column,
+                    operator=operator,
+                    value=threshold,
+                    display_label=f"{num_table}.{num_column} {operator} {threshold}",
+                )
             )
-        )
 
     # Deduplicate identical filter slots while preserving order
     unique_filters: list[FilterSlot] = []

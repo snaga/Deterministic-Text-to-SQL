@@ -42,7 +42,9 @@ class JevClient:
             max_retries: Number of retries on 5xx or connection errors (default: 2).
         """
         self.api_key = api_key or os.environ.get("TYPESAFE_API_KEY") or ""
-        self.base_url = base_url.rstrip("/")
+        env_base_url = os.environ.get("TYPESAFE_BASE_URL")
+        target_base_url = env_base_url if env_base_url else base_url
+        self.base_url = target_base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
 

@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 from typing import Annotated, Any
 
-import click
 import typer
 from rich import box
 from rich.console import Console, Group
@@ -39,7 +38,7 @@ class DefaultCommandGroup(TyperGroup):
     such as 'interactive' and 'schema'.
     """
 
-    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+    def parse_args(self, ctx: typer.Context, args: list[str]) -> list[str]:  # type: ignore[override]
         """Intercept arguments to prepend 'query' command when applicable."""
         help_flags = {"--help", "-h", "--install-completion", "--show-completion"}
         should_route_to_query = not args or (
