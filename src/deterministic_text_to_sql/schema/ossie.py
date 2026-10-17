@@ -268,6 +268,8 @@ class OssieSchemaAdapter:
                 type=datatype,
                 description=description,
                 role=col_role,
+                agg=f.get("agg"),
+                values=f.get("values"),
                 synonyms=col_synonyms,
             )
             columns.append(col_meta)
