@@ -4,10 +4,12 @@
 データベースの物理・論理スキーマ定義を Pydantic v2 モデルとして型安全に表現し、JSON ファイルや辞書データからロードおよび厳格なバリデーションを行います。
 
 ## 含まれる主要コンポーネント
-- `ColumnMetadata`: カラム名、データ型、論理説明、役割（id, dimension, metric, fk, attribute, filter, date_filter）、集約候補、許容値ホワイトリスト
+- `ColumnMetadata`: カラム名、データ型、論理説明、役割（id, dimension, metric, fk, attribute, filter, date_filter）、集約候補、許容値ホワイトリスト、自然言語シノニム
 - `ForeignKeyMetadata`: 単一・複合外部キーリレーション情報
-- `TableMetadata`: テーブル名、論理説明、自然言語エイリアス、主キー、外部キー、カラムリスト
-- `SchemaMetadata`: 全体スキーマコンテナ、テーブル検索ヘルパー
+- `TableMetadata`: テーブル名、論理説明、自然言語エイリアス／シノニム、主キー、外部キー、カラムリスト
+- `MetricDefinition`: セマンティック集約指標定義（ANSI SQL計算式、データ型、自然言語シノニム）
+- `HierarchyRule`: 階層オントロジー親子マッピング規則（包含値マッピング、イミュータブル）
+- `SchemaMetadata`: 全体スキーマコンテナ、テーブルおよびメトリクス検索ヘルパー
 - `SchemaLoader`: JSON / Dict からの読み込みとバリデーション
 - `SchemaError` / `SchemaValidationError`: スキーマ固有の例外
 

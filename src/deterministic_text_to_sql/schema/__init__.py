@@ -13,6 +13,8 @@ from deterministic_text_to_sql.schema.models import (
     ColumnMetadata,
     ColumnRole,
     ForeignKeyMetadata,
+    HierarchyRule,
+    MetricDefinition,
     SchemaMetadata,
     TableMetadata,
 )
@@ -21,6 +23,8 @@ __all__ = [
     "ColumnMetadata",
     "ColumnRole",
     "ForeignKeyMetadata",
+    "HierarchyRule",
+    "MetricDefinition",
     "SchemaError",
     "SchemaLoader",
     "SchemaMetadata",
