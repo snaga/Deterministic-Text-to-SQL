@@ -97,7 +97,7 @@ def build_mock_jev_client() -> JevClient:
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content.decode("utf-8"))
-        eval_state = body.get("eval_state", "")
+        eval_state = body.get("state", body.get("eval_state", ""))
 
         for key, resp in mock_responses.items():
             if key in eval_state:

@@ -328,7 +328,7 @@ def create_tpch_mock_client() -> JevClient:
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content.decode("utf-8"))
-        eval_state = body.get("eval_state", "")
+        eval_state = body.get("state", body.get("eval_state", ""))
 
         # Match longest, most specific keys first to avoid premature prefix matches
         for key in sorted(mock_responses.keys(), key=len, reverse=True):

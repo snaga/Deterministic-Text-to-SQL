@@ -49,7 +49,7 @@ def create_mock_jev_client(mock_responses: dict[str, dict[str, Any]] | None = No
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content.decode("utf-8"))
-        eval_state = body.get("eval_state", "")
+        eval_state = body.get("state", body.get("eval_state", ""))
 
         if mock_responses:
             for key, resp in mock_responses.items():

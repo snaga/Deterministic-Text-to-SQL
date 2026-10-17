@@ -64,31 +64,104 @@ class TestExtractNumericLiterals:
 
 
 class TestJevPromptPayload:
-    """Tests for build_jev_payload helper."""
+    """Tests for build_jev_payload helper conforming to official Jev API specification."""
 
     def test_payload_structure_without_schema(self) -> None:
         payload = build_jev_payload("顧客の売上トップ5")
-        assert payload["eval_state"] == "顧客の売上トップ5"
-        assert "tasks" in payload
-        task_ids = [t["id"] for t in payload["tasks"]]
-        assert "primary_table" in task_ids
-        assert "dimension" in task_ids
-        assert "metric" in task_ids
-        assert "ranking" in task_ids
-        assert "ambiguity" in task_ids
+        assert payload["state"] == "顧客の売上トップ5"
+        assert payload["model"] == "jev-latest"
+        assert "questions" in payload
+        questions = payload["questions"]
+        assert "primary_table" in questions
+        assert "secondary_table" in questions
+        assert "dimension" in questions
+        assert "metric" in questions
+        assert "ranking" in questions
+        assert "needs_clarification" in questions
+        assert "has_numeric_filter" in questions
+        assert "numeric_column" in questions
+        assert "numeric_operator" in questions
+        assert "has_exclusion_filter" in questions
+        assert "exclusion_target" in questions
+        assert "has_master_filter" in questions
+        assert "master_nation" in questions
+        assert "master_region" in questions
+
+        # Verify criteria presence
+        assert "customer" in questions["primary_table"]["criteria"]
+        assert questions["needs_clarification"]["type"] == "noul"
 
     def test_payload_structure_with_schema(self, tpch_schema: SchemaMetadata) -> None:
         payload = build_jev_payload("アジアの売上", schema=tpch_schema)
-        primary_task = next(t for t in payload["tasks"] if t["id"] == "primary_table")
-        assert "customer" in primary_task["choices"]
-        assert "orders" in primary_task["choices"]
-        assert "lineitem" in primary_task["choices"]
+        assert payload["state"] == "アジアの売上"
+        questions = payload["questions"]
+        primary_criteria = questions["primary_table"]["criteria"]
+        assert "customer" in primary_criteria
+        assert "orders" in primary_criteria
+        assert "lineitem" in primary_criteria
 
 
 class TestJevSlotParsingAndWhitelistBinding:
-    """Tests for parse_jev_response and F-JEV-02 whitelist choice binding."""
+    """Tests for parse_jev_response, official answers structure, and whitelist binding."""
 
-    def test_normal_response_parsing(self, tpch_schema: SchemaMetadata) -> None:
+    def test_official_answers_format_parsing(self, tpch_schema: SchemaMetadata) -> None:
+        official_response = {
+            "model": "jev-latest",
+            "answers": {
+                "primary_table": {
+                    "type": "choice",
+                    "choice": "customer",
+                    "confidence": 0.98,
+                    "probabilities": {"customer": 0.98, "orders": 0.02},
+                },
+                "secondary_table": {
+                    "type": "choice",
+                    "choice": "orders",
+                },
+                "dimension": {
+                    "type": "choice",
+                    "choice": "c_name",
+                },
+                "metric": {
+                    "type": "choice",
+                    "choice": "sum_revenue",
+                },
+                "ranking": {
+                    "type": "choice",
+                    "choice": "top_5",
+                },
+                "needs_clarification": {
+                    "type": "noul",
+                    "noul": 0.05,
+                },
+                "has_master_filter": {
+                    "type": "noul",
+                    "noul": 0.95,
+                },
+                "master_region": {
+                    "type": "choice",
+                    "choice": "ASIA",
+                    "confidence": 0.99,
+                },
+            },
+        }
+        query = "アジアの顧客の売上トップ5"
+        parsed = parse_jev_response(query, official_response, schema=tpch_schema)
+
+        assert isinstance(parsed, ParsedSlots)
+        assert parsed.primary_table == "customer"
+        assert parsed.secondary_table == "orders"
+        assert parsed.dimension == "c_name"
+        assert parsed.metric == "sum_revenue"
+        assert parsed.ranking == "top_5"
+        assert parsed.needs_clarification is False
+        assert len(parsed.filter_slots) >= 1
+        assert any(
+            f.table == "region" and f.column == "r_name" and f.value == "ASIA"
+            for f in parsed.filter_slots
+        )
+
+    def test_legacy_results_format_parsing(self, tpch_schema: SchemaMetadata) -> None:
         raw_api_response = {
             "results": {
                 "primary_table": "customer",
@@ -103,17 +176,66 @@ class TestJevSlotParsingAndWhitelistBinding:
         query = "アジアの顧客の売上トップ5"
         parsed = parse_jev_response(query, raw_api_response, schema=tpch_schema)
 
-        assert isinstance(parsed, ParsedSlots)
         assert parsed.primary_table == "customer"
         assert parsed.secondary_table == "orders"
         assert parsed.dimension == "c_name"
         assert parsed.metric == "sum_revenue"
         assert parsed.ranking == "top_5"
         assert parsed.needs_clarification is False
-        assert len(parsed.filter_slots) >= 1
         assert any(
             f.table == "region" and f.column == "r_name" and f.value == "ASIA"
             for f in parsed.filter_slots
+        )
+
+    def test_structured_numeric_filter_extraction(self, tpch_schema: SchemaMetadata) -> None:
+        official_response = {
+            "model": "jev-latest",
+            "answers": {
+                "primary_table": {"type": "choice", "choice": "customer"},
+                "secondary_table": {"type": "choice", "choice": "none"},
+                "dimension": {"type": "choice", "choice": "none"},
+                "metric": {"type": "choice", "choice": "count_records"},
+                "ranking": {"type": "choice", "choice": "none"},
+                "needs_clarification": {"type": "noul", "noul": 0.02},
+                "has_numeric_filter": {"type": "noul", "noul": 0.99},
+                "numeric_column": {"type": "choice", "choice": "c_acctbal", "confidence": 0.95},
+                "numeric_operator": {"type": "choice", "choice": "GTE", "confidence": 0.92},
+            },
+        }
+        query = "口座残高が1000以上の顧客"
+        parsed = parse_jev_response(query, official_response, schema=tpch_schema)
+
+        assert parsed.primary_table == "customer"
+        assert len(parsed.filter_slots) == 1
+        fs = parsed.filter_slots[0]
+        assert fs.table == "customer"
+        assert fs.column == "c_acctbal"
+        assert fs.operator == ">="
+        assert fs.value == 1000.0
+
+    def test_structured_exclusion_filter_extraction(self, tpch_schema: SchemaMetadata) -> None:
+        official_response = {
+            "model": "jev-latest",
+            "answers": {
+                "primary_table": {"type": "choice", "choice": "lineitem"},
+                "secondary_table": {"type": "choice", "choice": "none"},
+                "dimension": {"type": "choice", "choice": "none"},
+                "metric": {"type": "choice", "choice": "sum_revenue"},
+                "ranking": {"type": "choice", "choice": "none"},
+                "needs_clarification": {"type": "noul", "noul": 0.05},
+                "has_exclusion_filter": {"type": "noul", "noul": 0.92},
+                "exclusion_target": {"type": "choice", "choice": "returns", "confidence": 0.90},
+            },
+        }
+        query = "返品を除外した売上合計"
+        parsed = parse_jev_response(query, official_response, schema=tpch_schema)
+
+        assert any(
+            fs.table == "lineitem"
+            and fs.column == "l_returnflag"
+            and fs.operator == "!="
+            and fs.value == "R"
+            for fs in parsed.filter_slots
         )
 
     def test_whitelist_binding_sanitizes_injection(self, tpch_schema: SchemaMetadata) -> None:
@@ -137,7 +259,6 @@ class TestJevSlotParsingAndWhitelistBinding:
         query = "アジアの顧客"
         parsed = parse_jev_response(query, malicious_response, schema=tpch_schema)
 
-        # Only 'ASIA' is whitelisted in region.r_name
         values_in_filters = [f.value for f in parsed.filter_slots]
         assert "ASIA" in values_in_filters
         assert "' OR '1'='1" not in values_in_filters
@@ -145,6 +266,7 @@ class TestJevSlotParsingAndWhitelistBinding:
         assert "DROP TABLE orders;" not in values_in_filters
 
     def test_ambiguity_hitl_flag_detection(self) -> None:
+        # 1. ambiguity keyword
         ambiguous_response = {
             "results": {
                 "primary_table": "orders",
@@ -153,6 +275,33 @@ class TestJevSlotParsingAndWhitelistBinding:
         }
         parsed = parse_jev_response("売上トップ5", ambiguous_response)
         assert parsed.needs_clarification is True
+
+        # 2. noul >= 0.45
+        noul_response = {
+            "model": "jev-latest",
+            "answers": {
+                "primary_table": {"type": "choice", "choice": "lineitem"},
+                "needs_clarification": {"type": "noul", "noul": 0.72},
+            },
+        }
+        parsed2 = parse_jev_response("売上トップ5", noul_response)
+        assert parsed2.needs_clarification is True
+
+        # 3. competing probabilities for sum_revenue
+        competing_response = {
+            "model": "jev-latest",
+            "answers": {
+                "primary_table": {
+                    "type": "choice",
+                    "choice": "lineitem",
+                    "probabilities": {"lineitem": 0.52, "orders": 0.48},
+                },
+                "metric": {"type": "choice", "choice": "sum_revenue"},
+                "needs_clarification": {"type": "noul", "noul": 0.20},
+            },
+        }
+        parsed3 = parse_jev_response("売上トップ5", competing_response)
+        assert parsed3.needs_clarification is True
 
     def test_numeric_filter_extraction_in_slots(self, tpch_schema: SchemaMetadata) -> None:
         response_data = {
@@ -176,15 +325,17 @@ class TestJevClientNetworkAndRetries:
 
     def test_extract_slots_e2e_mock(self, tpch_schema: SchemaMetadata) -> None:
         mock_response_data = {
-            "results": {
-                "primary_table": "customer",
-                "secondary_table": "orders",
-                "dimension": "c_name",
-                "metric": "sum_revenue",
-                "ranking": "top_5",
-                "ambiguity": "clear",
-                "filters": ["ASIA"],
-            }
+            "model": "jev-latest",
+            "answers": {
+                "primary_table": {"type": "choice", "choice": "customer"},
+                "secondary_table": {"type": "choice", "choice": "orders"},
+                "dimension": {"type": "choice", "choice": "c_name"},
+                "metric": {"type": "choice", "choice": "sum_revenue"},
+                "ranking": {"type": "choice", "choice": "top_5"},
+                "needs_clarification": {"type": "noul", "noul": 0.05},
+                "has_master_filter": {"type": "noul", "noul": 0.95},
+                "master_region": {"type": "choice", "choice": "ASIA"},
+            },
         }
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -210,7 +361,7 @@ class TestJevClientNetworkAndRetries:
         monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
         client = JevClient(api_key=None)
         with pytest.raises(JevAPIConnectionError, match="TypeSafe API key is required"):
-            client.call_api({"eval_state": "test"})
+            client.call_api({"state": "test"})
 
     def test_server_error_500_retries_and_raises(self) -> None:
         call_count = 0
@@ -227,7 +378,7 @@ class TestJevClientNetworkAndRetries:
         )
 
         with pytest.raises(JevAPIConnectionError, match="Server error 500"):
-            client.call_api({"eval_state": "test"})
+            client.call_api({"state": "test"})
 
         # Initial attempt + 2 retries = 3 calls
         assert call_count == 3
@@ -236,11 +387,12 @@ class TestJevClientNetworkAndRetries:
     def test_server_error_500_recovers_on_retry(self) -> None:
         call_count = 0
         mock_response_data = {
-            "results": {
-                "primary_table": "orders",
-                "metric": "count_records",
-                "ranking": "none",
-            }
+            "model": "jev-latest",
+            "answers": {
+                "primary_table": {"type": "choice", "choice": "orders"},
+                "metric": {"type": "choice", "choice": "count_records"},
+                "ranking": {"type": "choice", "choice": "none"},
+            },
         }
 
         def handler(_request: httpx.Request) -> httpx.Response:
@@ -256,8 +408,8 @@ class TestJevClientNetworkAndRetries:
             transport=httpx.MockTransport(handler),
         )
 
-        result = client.call_api({"eval_state": "test"})
-        assert result["results"]["primary_table"] == "orders"
+        result = client.call_api({"state": "test"})
+        assert result["answers"]["primary_table"]["choice"] == "orders"
         assert call_count == 2
         client.close()
 
@@ -276,7 +428,7 @@ class TestJevClientNetworkAndRetries:
         )
 
         with pytest.raises(JevAPIConnectionError, match="Network error during Jev API call"):
-            client.call_api({"eval_state": "test"})
+            client.call_api({"state": "test"})
 
         assert call_count == 3
         client.close()
@@ -296,7 +448,7 @@ class TestJevClientNetworkAndRetries:
         )
 
         with pytest.raises(JevAPIConnectionError, match="client error 400"):
-            client.call_api({"eval_state": "test"})
+            client.call_api({"state": "test"})
 
         # Client error should not be retried
         assert call_count == 1
@@ -317,7 +469,7 @@ class TestJevClientNetworkAndRetries:
         )
 
         with pytest.raises(JevResponseParseError):
-            client.call_api({"eval_state": "test"})
+            client.call_api({"state": "test"})
         client.close()
 
     def test_non_dict_json_response_raises_parse_error(self) -> None:
@@ -335,5 +487,5 @@ class TestJevClientNetworkAndRetries:
         )
 
         with pytest.raises(JevResponseParseError, match="Expected JSON object"):
-            client.call_api({"eval_state": "test"})
+            client.call_api({"state": "test"})
         client.close()

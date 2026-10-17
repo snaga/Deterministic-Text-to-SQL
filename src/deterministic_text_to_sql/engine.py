@@ -290,6 +290,7 @@ class DeterministicTextToSQLEngine:
         dialect: str = "postgres",
         clarify: str | None = None,
         force: bool = False,
+        clarification: str | None = None,
     ) -> EngineResult:
         """Process a natural language query end-to-end to generate deterministic SQL.
 
@@ -306,6 +307,7 @@ class DeterministicTextToSQLEngine:
             dialect: Target SQL dialect (e.g. 'postgres', 'duckdb', 'sqlite', 'snowflake').
             clarify: Disambiguation key (e.g. 'A', 'B', 'lineitem') overriding slash syntax.
             force: If True, bypass HITL intervention and synthesize best-effort SQL.
+            clarification: Alias for clarify parameter.
 
         Returns:
             EngineResult containing status, compiled SQL, HITL issues, or error messages.
@@ -314,13 +316,15 @@ class DeterministicTextToSQLEngine:
         jev_latency_ms = 0.0
         ast_latency_ms = 0.0
 
+        effective_clarify_arg = clarification if clarification is not None else clarify
+
         # Validate input query
         if not raw_query or not raw_query.strip():
             total_ms = (time.perf_counter() - t0) * 1000.0
             return EngineResult(
                 status=EngineStatus.ERROR,
                 query=raw_query,
-                clarification=clarify,
+                clarification=effective_clarify_arg,
                 dialect=dialect,
                 error_message="Query string cannot be empty or whitespace.",
                 latency_ms=LatencyMetrics(
@@ -332,7 +336,9 @@ class DeterministicTextToSQLEngine:
 
         try:
             # 1. Parse Input & Clarification
-            parsed_input = self._hitl_manager.parse_input(raw_query, clarify_arg=clarify)
+            parsed_input = self._hitl_manager.parse_input(
+                raw_query, clarify_arg=effective_clarify_arg
+            )
             base_query = parsed_input.base_query
             effective_clarify = parsed_input.clarification
 

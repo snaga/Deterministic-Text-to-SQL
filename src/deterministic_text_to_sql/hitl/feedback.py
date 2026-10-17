@@ -92,11 +92,15 @@ class HITLManager:
 
         raw = slots.raw_response or {}
         table_probs = raw.get("table_probs") or raw.get("probabilities") or raw.get("scores") or {}
+        if not table_probs and "answers" in raw and isinstance(raw["answers"], dict):
+            pt = raw["answers"].get("primary_table", {})
+            if isinstance(pt, dict) and isinstance(pt.get("probabilities"), dict):
+                table_probs = pt["probabilities"]
         if isinstance(table_probs, dict) and "lineitem" in table_probs and "orders" in table_probs:
             try:
                 p_line = float(table_probs["lineitem"])
                 p_ord = float(table_probs["orders"])
-                if abs(p_line - p_ord) <= 0.25:
+                if abs(p_line - p_ord) <= 0.35:
                     is_ambiguous = True
             except (ValueError, TypeError):
                 pass

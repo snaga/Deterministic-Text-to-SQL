@@ -105,7 +105,22 @@ def _extract_slots_dict(response_data: dict[str, Any]) -> dict[str, Any]:
 
     slots: dict[str, Any] = {}
 
-    if "results" in response_data:
+    if "answers" in response_data and isinstance(response_data["answers"], dict):
+        answers = response_data["answers"]
+        for k, v in answers.items():
+            if isinstance(v, dict):
+                # Choice or noul value
+                val = v.get("choice")
+                if val is None:
+                    val = v.get("noul")
+                if val is None:
+                    val = v.get("value")
+                slots[k] = val
+                slots[f"_item_{k}"] = v
+            else:
+                slots[k] = v
+        slots["_answers"] = answers
+    elif "results" in response_data:
         results = response_data["results"]
         if isinstance(results, dict):
             slots.update(results)
@@ -137,7 +152,7 @@ def parse_jev_response(
     1. Choice validation for primary table, secondary table, dimension, and metric.
     2. Whitelist Choice binding (F-JEV-02) for categorical filters.
     3. Detection and sanitization against SQL injection patterns.
-    4. Numeric literal and comparison operator filter extraction.
+    4. Numeric literal, comparison operator, master code, and exclusion filter extraction.
     5. Ambiguity flag determination for Human-in-the-Loop intervention.
 
     Args:
@@ -182,7 +197,6 @@ def parse_jev_response(
         # Strip table prefix if provided (e.g. "customer.c_name" -> "c_name")
         dim_col_name = raw_dim.split(".")[-1]
         if schema is not None:
-            # Verify column exists across tables
             col_found = False
             for tbl in schema.tables:
                 if tbl.get_column(dim_col_name) is not None:
@@ -199,6 +213,8 @@ def parse_jev_response(
         "count_records",
         "sum_revenue",
         "sum_quantity",
+        "sum_availqty",
+        "avg_retailprice",
         "avg_price",
         "sum_acctbal",
         "raw_list",
@@ -219,11 +235,40 @@ def parse_jev_response(
         ranking = "none"
 
     # 6. HITL Ambiguity Detection
+    raw_needs_clarify = slots_map.get("needs_clarification")
+    needs_clarification = False
+    if isinstance(raw_needs_clarify, (int, float)):
+        if float(raw_needs_clarify) >= 0.45:
+            needs_clarification = True
+    elif isinstance(raw_needs_clarify, bool) and raw_needs_clarify:
+        needs_clarification = True
+
     raw_ambiguity = str(slots_map.get("ambiguity", "")).lower()
-    raw_needs_clarify = slots_map.get("needs_clarification", False)
-    needs_clarification = (
-        bool(raw_needs_clarify) or "ambiguous" in raw_ambiguity or "clarification" in raw_ambiguity
-    )
+    if "ambiguous" in raw_ambiguity or "clarification" in raw_ambiguity:
+        needs_clarification = True
+
+    # Check probabilities difference for sum_revenue between lineitem and orders
+    pt_item = slots_map.get("_item_primary_table")
+    primary_probs: dict[str, float] = {}
+    if (
+        isinstance(pt_item, dict)
+        and "probabilities" in pt_item
+        and isinstance(pt_item["probabilities"], dict)
+    ):
+        primary_probs = pt_item["probabilities"]
+    elif "probabilities" in response_data and isinstance(response_data["probabilities"], dict):
+        primary_probs = response_data["probabilities"]
+    elif "table_probs" in response_data and isinstance(response_data["table_probs"], dict):
+        primary_probs = response_data["table_probs"]
+
+    if metric == "sum_revenue" and primary_probs:
+        try:
+            lineitem_p = float(primary_probs.get("lineitem", 0.0))
+            orders_p = float(primary_probs.get("orders", 0.0))
+            if lineitem_p > 0 and orders_p > 0 and abs(lineitem_p - orders_p) < 0.35:
+                needs_clarification = True
+        except (ValueError, TypeError):
+            pass
 
     # 7. Filter Slots Construction & Whitelist Choice Binding (F-JEV-02)
     filter_slots: list[FilterSlot] = []
@@ -237,7 +282,149 @@ def parse_jev_response(
                 except Exception:
                     continue
 
-    # 7.2 Categorical filter candidates from Jev response or query
+    # 7.2 Structured Jev answers extraction (numeric, exclusion, master nation/region)
+    # 7.2.A Numeric filter
+    has_num = slots_map.get("has_numeric_filter")
+    num_col = str(slots_map.get("numeric_column", "none")).strip()
+    num_op = str(slots_map.get("numeric_operator", "none")).strip()
+    num_col_item = slots_map.get("_item_numeric_column") or {}
+    num_col_conf = (
+        float(num_col_item.get("confidence", 0.0)) if isinstance(num_col_item, dict) else 0.0
+    )
+    has_num_val = (
+        float(has_num)
+        if isinstance(has_num, (int, float))
+        else (0.5 if has_num is True else 0.0)
+    )
+
+    op_map = {"GT": ">", "GTE": ">=", "LT": "<", "LTE": "<=", "EQ": "="}
+
+    if (
+        num_col != "none"
+        and num_op in op_map
+        and (has_num_val > 0.35 or num_col_conf > 0.6 or has_num is None)
+    ):
+        nums = extract_numeric_literals(query)
+        if ranking == "top_5" and 5.0 in nums:
+            nums.remove(5.0)
+        elif ranking == "top_10" and 10.0 in nums:
+            nums.remove(10.0)
+        val = nums[0] if nums else 0.0
+
+        target_tbl: str = primary_table
+        if schema is not None:
+            found_col_table = False
+            for t in schema.tables:
+                if t.get_column(num_col) is not None:
+                    target_tbl = t.name
+                    found_col_table = True
+                    break
+            if not found_col_table:
+                if num_col.startswith("c_"):
+                    target_tbl = "customer"
+                elif num_col.startswith("ps_"):
+                    target_tbl = "partsupp"
+                elif num_col.startswith("l_"):
+                    target_tbl = "lineitem"
+                elif num_col.startswith("o_"):
+                    target_tbl = "orders"
+                elif num_col.startswith("p_"):
+                    target_tbl = "part"
+                elif num_col.startswith("s_"):
+                    target_tbl = "supplier"
+        else:
+            if num_col.startswith("c_"):
+                target_tbl = "customer"
+            elif num_col.startswith("ps_"):
+                target_tbl = "partsupp"
+            elif num_col.startswith("l_"):
+                target_tbl = "lineitem"
+            elif num_col.startswith("o_"):
+                target_tbl = "orders"
+            elif num_col.startswith("p_"):
+                target_tbl = "part"
+            elif num_col.startswith("s_"):
+                target_tbl = "supplier"
+
+        filter_slots.append(
+            FilterSlot(
+                table=target_tbl,
+                column=num_col,
+                operator=op_map[num_op],
+                value=val,
+                display_label=f"{target_tbl}.{num_col} {op_map[num_op]} {val}",
+            )
+        )
+
+    # 7.2.B Exclusion filter
+    has_ex = slots_map.get("has_exclusion_filter")
+    target = str(slots_map.get("exclusion_target", "none")).strip()
+    ex_item = slots_map.get("_item_exclusion_target") or {}
+    ex_conf = float(ex_item.get("confidence", 0.0)) if isinstance(ex_item, dict) else 0.0
+    has_ex_val = (
+        float(has_ex)
+        if isinstance(has_ex, (int, float))
+        else (0.5 if has_ex is True else 0.0)
+    )
+
+    if target != "none" and (has_ex_val > 0.35 or ex_conf > 0.6 or has_ex is None):
+        if target == "returns":
+            filter_slots.append(
+                FilterSlot(
+                    table="lineitem",
+                    column="l_returnflag",
+                    operator="!=",
+                    value="R",
+                    display_label="lineitem.l_returnflag != 'R'",
+                )
+            )
+        elif target == "cancelled":
+            filter_slots.append(
+                FilterSlot(
+                    table="orders",
+                    column="o_orderstatus",
+                    operator="!=",
+                    value="P",
+                    display_label="orders.o_orderstatus != 'P'",
+                )
+            )
+
+    # 7.2.C Master code filter (nation / region)
+    has_mf = slots_map.get("has_master_filter")
+    nation = str(slots_map.get("master_nation", "none")).strip()
+    region = str(slots_map.get("master_region", "none")).strip()
+    nat_item = slots_map.get("_item_master_nation") or {}
+    reg_item = slots_map.get("_item_master_region") or {}
+    nat_conf = float(nat_item.get("confidence", 0.0)) if isinstance(nat_item, dict) else 0.0
+    reg_conf = float(reg_item.get("confidence", 0.0)) if isinstance(reg_item, dict) else 0.0
+    has_mf_val = (
+        float(has_mf)
+        if isinstance(has_mf, (int, float))
+        else (0.5 if has_mf is True else 0.0)
+    )
+
+    if nation != "none" and (has_mf_val > 0.35 or nat_conf > 0.6 or has_mf is None):
+        filter_slots.append(
+            FilterSlot(
+                table="nation",
+                column="n_name",
+                operator="=",
+                value=nation,
+                display_label=f"Nation: {nation}",
+            )
+        )
+    elif region != "none" and (has_mf_val > 0.35 or reg_conf > 0.6 or has_mf is None):
+        filter_slots.append(
+            FilterSlot(
+                table="region",
+                column="r_name",
+                operator="=",
+                value=region,
+                display_label=f"Region: {region}",
+            )
+        )
+
+    # 7.3 Categorical filter candidates from Jev response or query (whitelist fallback)
     filter_candidates: list[str] = []
     raw_filters = slots_map.get("filters")
     if isinstance(raw_filters, list):
@@ -318,7 +505,7 @@ def parse_jev_response(
                 if bound:
                     break
 
-    # 7.3 Numeric Literal Filter Extraction (fallback if no numeric filter already provided)
+    # 7.4 Numeric Literal Filter Extraction (fallback if no numeric filter already provided)
     has_numeric_filter = any(
         isinstance(fs.value, (int, float)) and fs.operator in (">=", "<=", ">", "<", "=")
         for fs in filter_slots

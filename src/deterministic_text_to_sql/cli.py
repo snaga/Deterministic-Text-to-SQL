@@ -7,6 +7,7 @@ and schema inspection commands.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -26,8 +27,16 @@ from deterministic_text_to_sql.engine import DeterministicTextToSQLEngine
 from deterministic_text_to_sql.jev.client import JevClient
 from deterministic_text_to_sql.models import EngineResult, EngineStatus
 
-console = Console()
-err_console = Console(stderr=True)
+if sys.platform == "win32":
+    if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+        with contextlib.suppress(Exception):
+            sys.stdout.reconfigure(encoding="utf-8")
+    if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+        with contextlib.suppress(Exception):
+            sys.stderr.reconfigure(encoding="utf-8")
+
+console = Console(safe_box=True)
+err_console = Console(stderr=True, safe_box=True)
 
 
 class DefaultCommandGroup(TyperGroup):
@@ -199,7 +208,7 @@ def _render_result_human(result: EngineResult, console_target: Console = console
         console_target.print(
             Panel(
                 Group(*elements),
-                title="[bold yellow]⚠️ Human-in-the-Loop Disambiguation Required[/]",
+                title="[bold yellow][!] Human-in-the-Loop Disambiguation Required[/]",
                 subtitle=f"Latency: {result.latency_ms.total:.1f}ms",
                 border_style="yellow",
             )
