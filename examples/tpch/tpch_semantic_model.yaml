@@ -1,0 +1,1277 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+version: 0.2.0.dev0
+name: tpch_semantic_model
+description: "TPC-H Benchmark Semantic Model (8 tables: region, nation, supplier, customer, part, partsupp, orders, lineitem)"
+
+datasets:
+  # ==========================================
+  # 1. region
+  # ==========================================
+  - name: region
+    source: region
+    description: "地域・大陸情報（AFRICA, AMERICA, ASIA, EUROPE, MIDDLE EAST）"
+    primary_key:
+      - r_regionkey
+    ai_context:
+      synonyms:
+        - "地域"
+        - "エリア"
+        - "大陸"
+        - "リージョン"
+        - "region"
+    fields:
+      - name: r_regionkey
+        datatype: INTEGER
+        description: "地域ID（主キー）"
+        role: id
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: r_regionkey
+        ai_context:
+          synonyms:
+            - "地域ID"
+            - "region key"
+            - "region id"
+      - name: r_name
+        datatype: "CHAR(25)"
+        description: "地域名（例: ASIA, EUROPE）"
+        role: dimension
+        values:
+          - AFRICA
+          - AMERICA
+          - ASIA
+          - EUROPE
+          - MIDDLE EAST
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: r_name
+        ai_context:
+          synonyms:
+            - "地域名"
+            - "エリア名"
+            - "大陸名"
+            - "region name"
+      - name: r_comment
+        datatype: "VARCHAR(152)"
+        description: "備考"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: r_comment
+        ai_context:
+          synonyms:
+            - "備考"
+            - "地域備考"
+            - "region comment"
+
+  # ==========================================
+  # 2. nation
+  # ==========================================
+  - name: nation
+    source: nation
+    description: "国情報（日本、アメリカ、中国、ドイツ等25カ国）"
+    primary_key:
+      - n_nationkey
+    ai_context:
+      synonyms:
+        - "国"
+        - "国家"
+        - "国名"
+        - "ネイション"
+        - "nation"
+        - "country"
+    fields:
+      - name: n_nationkey
+        datatype: INTEGER
+        description: "国ID（主キー）"
+        role: id
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: n_nationkey
+        ai_context:
+          synonyms:
+            - "国ID"
+            - "nation key"
+            - "nation id"
+      - name: n_name
+        datatype: "CHAR(25)"
+        description: "国名（例: JAPAN, UNITED STATES）"
+        role: dimension
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: n_name
+        ai_context:
+          synonyms:
+            - "国名"
+            - "国家名"
+            - "nation name"
+            - "country name"
+      - name: n_regionkey
+        datatype: INTEGER
+        description: "所属地域ID（外部キー: region.r_regionkey）"
+        role: fk
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: n_regionkey
+        ai_context:
+          synonyms:
+            - "地域ID"
+            - "所属地域ID"
+            - "region key"
+      - name: n_comment
+        datatype: "VARCHAR(152)"
+        description: "備考"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: n_comment
+        ai_context:
+          synonyms:
+            - "備考"
+            - "国備考"
+            - "nation comment"
+
+  # ==========================================
+  # 3. supplier
+  # ==========================================
+  - name: supplier
+    source: supplier
+    description: "仕入先・部品サプライヤー情報"
+    primary_key:
+      - s_suppkey
+    ai_context:
+      synonyms:
+        - "仕入先"
+        - "サプライヤー"
+        - "供給業者"
+        - "仕入業者"
+        - "supplier"
+        - "vendor"
+    fields:
+      - name: s_suppkey
+        datatype: INTEGER
+        description: "仕入先ID（主キー）"
+        role: id
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: s_suppkey
+        ai_context:
+          synonyms:
+            - "仕入先ID"
+            - "サプライヤーID"
+            - "supplier key"
+            - "supp key"
+      - name: s_name
+        datatype: "CHAR(25)"
+        description: "仕入先名"
+        role: dimension
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: s_name
+        ai_context:
+          synonyms:
+            - "仕入先名"
+            - "サプライヤー名"
+            - "supplier name"
+      - name: s_address
+        datatype: "VARCHAR(40)"
+        description: "住所"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: s_address
+        ai_context:
+          synonyms:
+            - "住所"
+            - "仕入先住所"
+            - "supplier address"
+      - name: s_nationkey
+        datatype: INTEGER
+        description: "所在国ID（外部キー: nation.n_nationkey）"
+        role: fk
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: s_nationkey
+        ai_context:
+          synonyms:
+            - "国ID"
+            - "所在国ID"
+            - "nation key"
+      - name: s_phone
+        datatype: "CHAR(15)"
+        description: "電話番号"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: s_phone
+        ai_context:
+          synonyms:
+            - "電話番号"
+            - "仕入先電話番号"
+            - "phone"
+      - name: s_acctbal
+        datatype: "DECIMAL(15,2)"
+        description: "口座残高・未払残高"
+        role: metric
+        agg:
+          - SUM
+          - AVG
+          - MIN
+          - MAX
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: s_acctbal
+        ai_context:
+          synonyms:
+            - "仕入先口座残高"
+            - "サプライヤー残高"
+            - "残高"
+            - "supplier account balance"
+            - "account balance"
+      - name: s_comment
+        datatype: "VARCHAR(101)"
+        description: "備考"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: s_comment
+        ai_context:
+          synonyms:
+            - "備考"
+            - "仕入先備考"
+            - "supplier comment"
+
+  # ==========================================
+  # 4. customer
+  # ==========================================
+  - name: customer
+    source: customer
+    description: "顧客・会員情報（セグメント、口座残高、国籍など）"
+    primary_key:
+      - c_custkey
+    ai_context:
+      synonyms:
+        - "顧客"
+        - "カスタマー"
+        - "会員"
+        - "ユーザー"
+        - "取引先"
+        - "customer"
+        - "client"
+    fields:
+      - name: c_custkey
+        datatype: BIGINT
+        description: "顧客ID（主キー）"
+        role: id
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: c_custkey
+        ai_context:
+          synonyms:
+            - "顧客ID"
+            - "会員ID"
+            - "customer key"
+            - "cust key"
+      - name: c_name
+        datatype: "VARCHAR(25)"
+        description: "顧客名"
+        role: dimension
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: c_name
+        ai_context:
+          synonyms:
+            - "顧客名"
+            - "顧客の名前"
+            - "会員名"
+            - "customer name"
+      - name: c_address
+        datatype: "VARCHAR(40)"
+        description: "住所"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: c_address
+        ai_context:
+          synonyms:
+            - "住所"
+            - "顧客住所"
+            - "customer address"
+      - name: c_nationkey
+        datatype: INTEGER
+        description: "所在国ID（外部キー: nation.n_nationkey）"
+        role: fk
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: c_nationkey
+        ai_context:
+          synonyms:
+            - "国ID"
+            - "所在国ID"
+            - "nation key"
+      - name: c_phone
+        datatype: "CHAR(15)"
+        description: "電話番号"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: c_phone
+        ai_context:
+          synonyms:
+            - "電話番号"
+            - "顧客電話番号"
+            - "phone"
+      - name: c_acctbal
+        datatype: "DOUBLE PRECISION"
+        description: "口座残高"
+        role: metric
+        agg:
+          - SUM
+          - AVG
+          - MIN
+          - MAX
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: c_acctbal
+        ai_context:
+          synonyms:
+            - "口座残高"
+            - "顧客残高"
+            - "残高"
+            - "customer account balance"
+            - "account balance"
+            - "acctbal"
+      - name: c_mktsegment
+        datatype: "CHAR(10)"
+        description: "市場セグメント（AUTOMOBILE, BUILDING, FURNITURE, MACHINERY, HOUSEHOLD）"
+        role: dimension
+        values:
+          - AUTOMOBILE
+          - BUILDING
+          - FURNITURE
+          - MACHINERY
+          - HOUSEHOLD
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: c_mktsegment
+        ai_context:
+          synonyms:
+            - "市場セグメント"
+            - "顧客区分"
+            - "セグメント"
+            - "market segment"
+            - "segment"
+      - name: c_comment
+        datatype: "VARCHAR(117)"
+        description: "備考"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: c_comment
+        ai_context:
+          synonyms:
+            - "備考"
+            - "顧客備考"
+            - "customer comment"
+
+  # ==========================================
+  # 5. part
+  # ==========================================
+  - name: part
+    source: part
+    description: "部品・製品カタログ情報（名称、ブランド、メーカー、容器、小売価格）"
+    primary_key:
+      - p_partkey
+    ai_context:
+      synonyms:
+        - "部品"
+        - "商品"
+        - "パーツ"
+        - "製品"
+        - "カタログ"
+        - "アイテム"
+        - "part"
+        - "item"
+        - "product"
+    fields:
+      - name: p_partkey
+        datatype: INTEGER
+        description: "部品ID（主キー）"
+        role: id
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: p_partkey
+        ai_context:
+          synonyms:
+            - "部品ID"
+            - "商品ID"
+            - "製品ID"
+            - "part key"
+      - name: p_name
+        datatype: "VARCHAR(55)"
+        description: "部品名"
+        role: dimension
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: p_name
+        ai_context:
+          synonyms:
+            - "部品名"
+            - "商品名"
+            - "製品名"
+            - "part name"
+            - "product name"
+      - name: p_mfgr
+        datatype: "CHAR(25)"
+        description: "製造メーカー"
+        role: dimension
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: p_mfgr
+        ai_context:
+          synonyms:
+            - "製造メーカー"
+            - "メーカー"
+            - "manufacturer"
+            - "mfgr"
+      - name: p_brand
+        datatype: "CHAR(10)"
+        description: "ブランド"
+        role: dimension
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: p_brand
+        ai_context:
+          synonyms:
+            - "ブランド"
+            - "brand"
+      - name: p_type
+        datatype: "VARCHAR(25)"
+        description: "部品種別（例: PROMO BRUSHED BRASS, LARGE POLISHED COPPER）"
+        role: dimension
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: p_type
+        ai_context:
+          synonyms:
+            - "部品種別"
+            - "商品区分"
+            - "part type"
+            - "type"
+      - name: p_size
+        datatype: INTEGER
+        description: "サイズ"
+        role: dimension
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: p_size
+        ai_context:
+          synonyms:
+            - "サイズ"
+            - "部品サイズ"
+            - "size"
+      - name: p_container
+        datatype: "CHAR(10)"
+        description: "梱包容器（例: SM CASE, JUMBO BOX）"
+        role: dimension
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: p_container
+        ai_context:
+          synonyms:
+            - "容器"
+            - "梱包容器"
+            - "container"
+      - name: p_retailprice
+        datatype: "DECIMAL(15,2)"
+        description: "小売定価"
+        role: metric
+        agg:
+          - AVG
+          - MIN
+          - MAX
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: p_retailprice
+        ai_context:
+          synonyms:
+            - "小売価格"
+            - "定価"
+            - "retail price"
+            - "price"
+      - name: p_comment
+        datatype: "VARCHAR(23)"
+        description: "備考"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: p_comment
+        ai_context:
+          synonyms:
+            - "備考"
+            - "部品備考"
+            - "part comment"
+
+  # ==========================================
+  # 6. partsupp
+  # ==========================================
+  - name: partsupp
+    source: partsupp
+    description: "部品×サプライヤー供給情報（在庫数、供給・仕入原価）"
+    primary_key:
+      - ps_partkey
+      - ps_suppkey
+    ai_context:
+      synonyms:
+        - "在庫"
+        - "部品供給"
+        - "仕入原価"
+        - "供給情報"
+        - "部品在庫"
+        - "partsupp"
+        - "inventory"
+    fields:
+      - name: ps_partkey
+        datatype: BIGINT
+        description: "部品ID（複合主キー / 外部キー: part.p_partkey）"
+        role: fk
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: ps_partkey
+        ai_context:
+          synonyms:
+            - "部品ID"
+            - "商品ID"
+            - "part key"
+      - name: ps_suppkey
+        datatype: BIGINT
+        description: "仕入先ID（複合主キー / 外部キー: supplier.s_suppkey）"
+        role: fk
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: ps_suppkey
+        ai_context:
+          synonyms:
+            - "仕入先ID"
+            - "サプライヤーID"
+            - "supplier key"
+      - name: ps_availqty
+        datatype: BIGINT
+        description: "利用可能在庫数量"
+        role: metric
+        agg:
+          - SUM
+          - AVG
+          - MIN
+          - MAX
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: ps_availqty
+        ai_context:
+          synonyms:
+            - "利用可能在庫"
+            - "在庫数量"
+            - "在庫数"
+            - "available quantity"
+            - "avail qty"
+            - "stock"
+      - name: ps_supplycost
+        datatype: "DOUBLE PRECISION"
+        description: "仕入原価・調達コスト"
+        role: metric
+        agg:
+          - SUM
+          - AVG
+          - MIN
+          - MAX
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: ps_supplycost
+        ai_context:
+          synonyms:
+            - "仕入原価"
+            - "調達コスト"
+            - "供給コスト"
+            - "supply cost"
+      - name: ps_comment
+        datatype: "VARCHAR(199)"
+        description: "備考"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: ps_comment
+        ai_context:
+          synonyms:
+            - "備考"
+            - "供給備考"
+            - "partsupp comment"
+
+  # ==========================================
+  # 7. orders
+  # ==========================================
+  - name: orders
+    source: orders
+    description: "注文伝票ヘッダー情報（注文日、注文ステータス、合計請求額、優先度）"
+    primary_key:
+      - o_orderkey
+    ai_context:
+      synonyms:
+        - "注文"
+        - "オーダー"
+        - "受注"
+        - "注文ヘッダー"
+        - "orders"
+        - "sales_order"
+    fields:
+      - name: o_orderkey
+        datatype: BIGINT
+        description: "注文ID（主キー）"
+        role: id
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: o_orderkey
+        ai_context:
+          synonyms:
+            - "注文ID"
+            - "受注番号"
+            - "order key"
+            - "order id"
+      - name: o_custkey
+        datatype: BIGINT
+        description: "注文した顧客ID（外部キー: customer.c_custkey）"
+        role: fk
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: o_custkey
+        ai_context:
+          synonyms:
+            - "注文顧客ID"
+            - "顧客ID"
+            - "customer key"
+      - name: o_orderstatus
+        datatype: "CHAR(1)"
+        description: "注文ステータス（O: 未完了/Open, F: 完了/Fulfilled, P: 保留/Pending）"
+        role: filter
+        values:
+          - O
+          - F
+          - P
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: o_orderstatus
+        ai_context:
+          synonyms:
+            - "注文ステータス"
+            - "受注状況"
+            - "order status"
+      - name: o_totalprice
+        datatype: "DOUBLE PRECISION"
+        description: "注文合計金額"
+        role: metric
+        agg:
+          - SUM
+          - AVG
+          - MIN
+          - MAX
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: o_totalprice
+        ai_context:
+          synonyms:
+            - "注文合計金額"
+            - "注文金額"
+            - "total price"
+      - name: o_orderdate
+        datatype: DATE
+        description: "注文日"
+        role: date_filter
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: o_orderdate
+        ai_context:
+          synonyms:
+            - "注文日"
+            - "受注日"
+            - "order date"
+      - name: o_orderpriority
+        datatype: "CHAR(15)"
+        description: "注文優先度（1-URGENT, 2-HIGH, 3-MEDIUM, 4-NOT SPECIFIED, 5-LOW）"
+        role: dimension
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: o_orderpriority
+        ai_context:
+          synonyms:
+            - "注文優先度"
+            - "優先度"
+            - "order priority"
+      - name: o_clerk
+        datatype: "CHAR(15)"
+        description: "担当事務員"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: o_clerk
+        ai_context:
+          synonyms:
+            - "担当事務員"
+            - "係員"
+            - "clerk"
+      - name: o_shippriority
+        datatype: INTEGER
+        description: "出荷優先順位"
+        role: dimension
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: o_shippriority
+        ai_context:
+          synonyms:
+            - "出荷優先順位"
+            - "ship priority"
+      - name: o_comment
+        datatype: "VARCHAR(79)"
+        description: "備考"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: o_comment
+        ai_context:
+          synonyms:
+            - "備考"
+            - "注文備考"
+            - "order comment"
+
+  # ==========================================
+  # 8. lineitem
+  # ==========================================
+  - name: lineitem
+    source: lineitem
+    description: "注文明細情報（商品ごとの数量、売上金額、値引率、税率、返品フラグ、配送日、配送モード）"
+    primary_key:
+      - l_orderkey
+      - l_linenumber
+    ai_context:
+      synonyms:
+        - "明細"
+        - "注文明細"
+        - "売上明細"
+        - "ラインアイテム"
+        - "購入明細"
+        - "lineitem"
+        - "order_detail"
+    fields:
+      - name: l_orderkey
+        datatype: BIGINT
+        description: "注文ID（複合主キー / 外部キー: orders.o_orderkey）"
+        role: fk
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_orderkey
+        ai_context:
+          synonyms:
+            - "注文ID"
+            - "受注番号"
+            - "order key"
+      - name: l_partkey
+        datatype: BIGINT
+        description: "部品ID（外部キー: part.p_partkey）"
+        role: fk
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_partkey
+        ai_context:
+          synonyms:
+            - "部品ID"
+            - "商品ID"
+            - "part key"
+      - name: l_suppkey
+        datatype: BIGINT
+        description: "仕入先ID（外部キー: supplier.s_suppkey）"
+        role: fk
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_suppkey
+        ai_context:
+          synonyms:
+            - "仕入先ID"
+            - "supplier key"
+      - name: l_linenumber
+        datatype: BIGINT
+        description: "注文内明細番号（複合主キー）"
+        role: id
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_linenumber
+        ai_context:
+          synonyms:
+            - "明細番号"
+            - "明細行番号"
+            - "line number"
+      - name: l_quantity
+        datatype: "DOUBLE PRECISION"
+        description: "購入数量"
+        role: metric
+        agg:
+          - SUM
+          - AVG
+          - MIN
+          - MAX
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_quantity
+        ai_context:
+          synonyms:
+            - "数量"
+            - "購入数量"
+            - "販売数量"
+            - "quantity"
+            - "qty"
+      - name: l_extendedprice
+        datatype: "DOUBLE PRECISION"
+        description: "定価売上額（quantity * retailprice）"
+        role: metric
+        agg:
+          - SUM
+          - AVG
+          - MIN
+          - MAX
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_extendedprice
+        ai_context:
+          synonyms:
+            - "定価売上額"
+            - "売上額"
+            - "金額"
+            - "extended price"
+      - name: l_discount
+        datatype: "DOUBLE PRECISION"
+        description: "値引率（0.00 〜 0.10）"
+        role: metric
+        agg:
+          - AVG
+          - MIN
+          - MAX
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_discount
+        ai_context:
+          synonyms:
+            - "値引率"
+            - "割引率"
+            - "discount"
+      - name: l_tax
+        datatype: "DOUBLE PRECISION"
+        description: "税率（0.00 〜 0.08）"
+        role: metric
+        agg:
+          - AVG
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_tax
+        ai_context:
+          synonyms:
+            - "税率"
+            - "消費税率"
+            - "tax"
+      - name: l_returnflag
+        datatype: "CHAR(1)"
+        description: "返品フラグ（R: 返品済み/Returned, A: 返品承認済み/Approved, N: 正常/Normal）"
+        role: filter
+        values:
+          - R
+          - A
+          - N
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_returnflag
+        ai_context:
+          synonyms:
+            - "返品フラグ"
+            - "返品状況"
+            - "return flag"
+      - name: l_linestatus
+        datatype: "CHAR(1)"
+        description: "明細ステータス（O: 出荷前/Open, F: 出荷済・請求済/Fulfilled）"
+        role: filter
+        values:
+          - O
+          - F
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_linestatus
+        ai_context:
+          synonyms:
+            - "明細ステータス"
+            - "line status"
+      - name: l_shipdate
+        datatype: DATE
+        description: "出荷日"
+        role: date_filter
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_shipdate
+        ai_context:
+          synonyms:
+            - "出荷日"
+            - "発送日"
+            - "ship date"
+      - name: l_commitdate
+        datatype: DATE
+        description: "確約納期"
+        role: date_filter
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_commitdate
+        ai_context:
+          synonyms:
+            - "確約納期"
+            - "納期"
+            - "commit date"
+      - name: l_receiptdate
+        datatype: DATE
+        description: "受領受取日"
+        role: date_filter
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_receiptdate
+        ai_context:
+          synonyms:
+            - "受領受取日"
+            - "受取日"
+            - "receipt date"
+      - name: l_shipinstruct
+        datatype: "CHAR(25)"
+        description: "配送指示（DELIVER IN PERSON, TAKE BACK RETURN 等）"
+        role: dimension
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_shipinstruct
+        ai_context:
+          synonyms:
+            - "配送指示"
+            - "出荷指示"
+            - "ship instructions"
+      - name: l_shipmode
+        datatype: "CHAR(10)"
+        description: "配送手段（AIR, REG AIR, SHIP, TRUCK, MAIL, FOB, RAIL）"
+        role: dimension
+        values:
+          - AIR
+          - REG AIR
+          - SHIP
+          - TRUCK
+          - MAIL
+          - FOB
+          - RAIL
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_shipmode
+        ai_context:
+          synonyms:
+            - "配送手段"
+            - "出荷方法"
+            - "ship mode"
+      - name: l_comment
+        datatype: "VARCHAR(44)"
+        description: "明細備考"
+        role: attribute
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: l_comment
+        ai_context:
+          synonyms:
+            - "備考"
+            - "明細備考"
+            - "lineitem comment"
+
+# ==========================================
+# Relationships (Foreign Keys)
+# ==========================================
+relationships:
+  - name: nation_to_region
+    from: nation
+    to: region
+    from_columns:
+      - n_regionkey
+    to_columns:
+      - r_regionkey
+
+  - name: supplier_to_nation
+    from: supplier
+    to: nation
+    from_columns:
+      - s_nationkey
+    to_columns:
+      - n_nationkey
+
+  - name: customer_to_nation
+    from: customer
+    to: nation
+    from_columns:
+      - c_nationkey
+    to_columns:
+      - n_nationkey
+
+  - name: partsupp_to_part
+    from: partsupp
+    to: part
+    from_columns:
+      - ps_partkey
+    to_columns:
+      - p_partkey
+
+  - name: partsupp_to_supplier
+    from: partsupp
+    to: supplier
+    from_columns:
+      - ps_suppkey
+    to_columns:
+      - s_suppkey
+
+  - name: orders_to_customer
+    from: orders
+    to: customer
+    from_columns:
+      - o_custkey
+    to_columns:
+      - c_custkey
+
+  - name: lineitem_to_orders
+    from: lineitem
+    to: orders
+    from_columns:
+      - l_orderkey
+    to_columns:
+      - o_orderkey
+
+  - name: lineitem_to_part
+    from: lineitem
+    to: part
+    from_columns:
+      - l_partkey
+    to_columns:
+      - p_partkey
+
+  - name: lineitem_to_supplier
+    from: lineitem
+    to: supplier
+    from_columns:
+      - l_suppkey
+    to_columns:
+      - s_suppkey
+
+  - name: lineitem_to_partsupp
+    from: lineitem
+    to: partsupp
+    from_columns:
+      - l_partkey
+      - l_suppkey
+    to_columns:
+      - ps_partkey
+      - ps_suppkey
+
+# ==========================================
+# Semantic Metrics
+# ==========================================
+metrics:
+  - name: total_revenue
+    description: "合計売上金額（値引き後）"
+    datatype: DOUBLE
+    expression:
+      dialects:
+        - dialect: ANSI_SQL
+          expression: "SUM(lineitem.l_extendedprice * (1 - lineitem.l_discount))"
+    ai_context:
+      synonyms:
+        - "売上"
+        - "合計売上"
+        - "純売上"
+        - "total revenue"
+        - "revenue"
+
+  - name: total_quantity
+    description: "販売数量合計"
+    datatype: DOUBLE
+    expression:
+      dialects:
+        - dialect: ANSI_SQL
+          expression: "SUM(lineitem.l_quantity)"
+    ai_context:
+      synonyms:
+        - "数量"
+        - "販売数量"
+        - "total quantity"
+        - "quantity"
+
+  - name: avg_price
+    description: "平均定価金額"
+    datatype: DOUBLE
+    expression:
+      dialects:
+        - dialect: ANSI_SQL
+          expression: "AVG(lineitem.l_extendedprice)"
+    ai_context:
+      synonyms:
+        - "平均価格"
+        - "平均単価"
+        - "average price"
+
+  - name: total_acctbal
+    description: "顧客口座残高合計"
+    datatype: DOUBLE
+    expression:
+      dialects:
+        - dialect: ANSI_SQL
+          expression: "SUM(customer.c_acctbal)"
+    ai_context:
+      synonyms:
+        - "口座残高合計"
+        - "顧客残高合計"
+        - "total account balance"
+
+  - name: order_count
+    description: "注文総数"
+    datatype: BIGINT
+    expression:
+      dialects:
+        - dialect: ANSI_SQL
+          expression: "COUNT(orders.o_orderkey)"
+    ai_context:
+      synonyms:
+        - "注文数"
+        - "受注件数"
+        - "order count"
+
+  - name: customer_count
+    description: "顧客総数"
+    datatype: BIGINT
+    expression:
+      dialects:
+        - dialect: ANSI_SQL
+          expression: "COUNT(customer.c_custkey)"
+    ai_context:
+      synonyms:
+        - "顧客数"
+        - "会員数"
+        - "customer count"
+
+# ==========================================
+# Custom Extensions (Ontology Hierarchies)
+# ==========================================
+custom_extensions:
+  - vendor_name: "DETERMINISTIC_TEXT_TO_SQL"
+    data:
+      hierarchies:
+        - parent_table: "region"
+          parent_column: "r_name"
+          child_table: "nation"
+          child_column: "n_name"
+          child_to_parent:
+            # AFRICA
+            ALGERIA: AFRICA
+            ETHIOPIA: AFRICA
+            KENYA: AFRICA
+            MOROCCO: AFRICA
+            MOZAMBIQUE: AFRICA
+            # AMERICA
+            ARGENTINA: AMERICA
+            BRAZIL: AMERICA
+            CANADA: AMERICA
+            PERU: AMERICA
+            UNITED STATES: AMERICA
+            # ASIA
+            CHINA: ASIA
+            INDIA: ASIA
+            INDONESIA: ASIA
+            JAPAN: ASIA
+            VIETNAM: ASIA
+            # EUROPE
+            FRANCE: EUROPE
+            GERMANY: EUROPE
+            ROMANIA: EUROPE
+            RUSSIA: EUROPE
+            UNITED KINGDOM: EUROPE
+            # MIDDLE EAST
+            EGYPT: MIDDLE EAST
+            IRAN: MIDDLE EAST
+            IRAQ: MIDDLE EAST
+            JORDAN: MIDDLE EAST
+            SAUDI ARABIA: MIDDLE EAST
