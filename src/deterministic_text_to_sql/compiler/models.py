@@ -32,13 +32,16 @@ class MetricSlot(BaseModel):
         column: Column name or expression to aggregate (e.g. 'o_totalprice', 'c_custkey', '*').
         agg: Aggregation function (e.g. 'SUM', 'COUNT', 'AVG', 'MIN', 'MAX').
         alias: Optional column alias in SELECT (e.g. 'total_revenue').
+        expression: Optional raw SQL aggregation expression
+            (e.g. 'SUM(lineitem.l_extendedprice * (1 - lineitem.l_discount))').
     """
 
     model_config = ConfigDict(frozen=True)
 
-    column: str
+    column: str = ""
     agg: str = "SUM"
     alias: str | None = None
+    expression: str | None = None
 
 
 class OrderBySlot(BaseModel):

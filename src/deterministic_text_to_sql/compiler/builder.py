@@ -1,5 +1,6 @@
 """Type-safe deterministic SQL query builder based on sqlglot AST nodes."""
 
+from collections.abc import Callable
 from typing import Any
 
 import sqlglot
@@ -222,6 +223,61 @@ class GenericSQLBuilder:
 
         raise SQLBuildError(f"Unsupported filter operator: '{filter_slot.operator}'")
 
+    def _extract_metric_tables_and_resolve_columns(
+        self,
+        parsed_node: exp.Expr,
+        primary_table: str,
+        add_ref_table: Callable[[str | None], None],
+    ) -> None:
+        """Extract all referenced tables from a parsed metric AST and resolve column references.
+
+        Traverses the AST for column references, resolves table qualification
+        using schema metadata, and registers referenced tables for JOIN resolution.
+
+        Args:
+            parsed_node: Parsed sqlglot expression AST.
+            primary_table: Primary table name for default column resolution.
+            add_ref_table: Callback to register referenced tables for JOIN resolution.
+
+        Raises:
+            SQLBuildError: If a referenced table or column cannot be resolved.
+        """
+        for col_node in parsed_node.find_all(exp.Column):
+            if isinstance(col_node.this, exp.Star) or col_node.name == "*":
+                if col_node.table:
+                    tbl_meta = self._schema.get_table(col_node.table)
+                    if tbl_meta is None:
+                        raise SQLBuildError(
+                            f"Table '{col_node.table}' in metric expression does not exist in "
+                            "schema"
+                        )
+                    add_ref_table(tbl_meta.name)
+                    col_node.set("table", exp.to_identifier(tbl_meta.name))
+                continue
+
+            if col_node.table:
+                tbl_meta = self._schema.get_table(col_node.table)
+                if tbl_meta is None:
+                    raise SQLBuildError(
+                        f"Table '{col_node.table}' in metric expression does not exist in schema"
+                    )
+                col_meta = tbl_meta.get_column(col_node.name)
+                if col_meta is None:
+                    raise SQLBuildError(
+                        f"Column '{col_node.name}' does not exist in table '{tbl_meta.name}'"
+                    )
+                add_ref_table(tbl_meta.name)
+                col_node.set("table", exp.to_identifier(tbl_meta.name))
+                col_node.set("this", exp.to_identifier(col_meta.name))
+            else:
+                tbl_name, col_name = self._resolve_column(
+                    col_node.name, default_table=primary_table
+                )
+                if tbl_name:
+                    add_ref_table(tbl_name)
+                    col_node.set("table", exp.to_identifier(tbl_name))
+                col_node.set("this", exp.to_identifier(col_name))
+
     def build(
         self,
         intent: QueryIntent | dict[str, Any],
@@ -266,6 +322,7 @@ class GenericSQLBuilder:
         group_nodes: list[exp.Expr] = []
         alias_to_expr: dict[str, exp.Expr] = {}
         metric_col_to_expr: dict[str, exp.Expr] = {}
+        metric_col_to_alias: dict[str, str] = {}
 
         for dim in norm_intent.dimensions:
             # Check for alias syntax e.g. "col AS alias"
@@ -296,27 +353,109 @@ class GenericSQLBuilder:
                 m_col = metric.column
                 m_agg = metric.agg
                 m_alias = metric.alias
+                m_expr = metric.expression
             else:
                 m_col = metric[0]
                 m_agg = metric[1]
                 m_alias = metric[2] if len(metric) > 2 else None
+                m_expr = None
 
-            m_col_clean = m_col.strip()
-            inner_expr: exp.Expression
-            if m_col_clean == "*":
-                inner_expr = exp.Star()
+            m_col_clean = m_col.strip() if m_col else ""
+            m_expr_clean = m_expr.strip() if m_expr else None
+
+            agg_node: exp.Expr
+
+            # Priority 1: Explicit expression in MetricSlot
+            if m_expr_clean:
+                try:
+                    parsed_node = sqlglot.parse_one(m_expr_clean)
+                except Exception as e:
+                    raise SQLBuildError(
+                        f"Failed to parse metric expression '{m_expr_clean}': {e}"
+                    ) from e
+                if parsed_node is None:
+                    raise SQLBuildError(
+                        f"Failed to parse metric expression '{m_expr_clean}': "
+                        "expression is empty or invalid"
+                    )
+
+                self._extract_metric_tables_and_resolve_columns(
+                    parsed_node, primary_table, add_ref_table
+                )
+                agg_node = parsed_node
+
+                if m_alias:
+                    metric_col_to_alias[m_expr_clean] = m_alias
+                    if m_col_clean:
+                        metric_col_to_alias[m_col_clean] = m_alias
+                metric_col_to_expr[m_expr_clean] = agg_node
+                if m_col_clean:
+                    metric_col_to_expr[m_col_clean] = agg_node
+
+            # Priority 2: Semantic metric defined in schema
+            elif (
+                m_col_clean
+                and hasattr(self._schema, "get_metric")
+                and (metric_def := self._schema.get_metric(m_col_clean)) is not None
+            ):
+                try:
+                    parsed_node = sqlglot.parse_one(metric_def.expression)
+                except Exception as e:
+                    raise SQLBuildError(
+                        f"Failed to parse semantic metric expression '{metric_def.expression}' "
+                        f"for metric '{metric_def.name}': {e}"
+                    ) from e
+                if parsed_node is None:
+                    raise SQLBuildError(
+                        f"Failed to parse semantic metric expression '{metric_def.expression}' "
+                        f"for metric '{metric_def.name}': expression is empty or invalid"
+                    )
+
+                self._extract_metric_tables_and_resolve_columns(
+                    parsed_node, primary_table, add_ref_table
+                )
+                agg_node = parsed_node
+
+                if m_alias is None:
+                    m_alias = metric_def.name
+
+                metric_col_to_alias[metric_def.name] = m_alias
+                metric_col_to_alias[m_col_clean] = m_alias
+                metric_col_to_expr[metric_def.name] = agg_node
+                metric_col_to_expr[m_col_clean] = agg_node
+                for syn in metric_def.synonyms:
+                    metric_col_to_alias[syn] = m_alias
+                    metric_col_to_expr[syn] = agg_node
+
+            # Priority 3: Fallback to single-column aggregate function
             else:
-                tbl_name, col_name = self._resolve_column(m_col_clean, default_table=primary_table)
-                add_ref_table(tbl_name)
-                inner_expr = exp.column(col_name, tbl_name) if tbl_name else exp.column(col_name)
+                if not m_col_clean:
+                    raise SQLBuildError(
+                        "Metric must specify either 'expression' or a valid 'column'"
+                    )
 
-            agg_node = exp.func(m_agg.strip().upper(), inner_expr)
-            metric_col_to_expr[m_col_clean] = agg_node
+                inner_expr: exp.Expression
+                if m_col_clean == "*":
+                    inner_expr = exp.Star()
+                else:
+                    tbl_name, col_name = self._resolve_column(
+                        m_col_clean, default_table=primary_table
+                    )
+                    add_ref_table(tbl_name)
+                    inner_expr = (
+                        exp.column(col_name, tbl_name) if tbl_name else exp.column(col_name)
+                    )
+
+                agg_node = exp.func(m_agg.strip().upper(), inner_expr)
+                metric_col_to_expr[m_col_clean] = agg_node
+                if m_alias:
+                    metric_col_to_alias[m_col_clean] = m_alias
 
             if m_alias:
                 aliased_node = exp.alias_(agg_node, m_alias)
                 select_nodes.append(aliased_node)
                 alias_to_expr[m_alias] = aliased_node
+                metric_col_to_alias[m_alias] = m_alias
             else:
                 select_nodes.append(agg_node)
 
@@ -393,11 +532,14 @@ class GenericSQLBuilder:
                 # 1. Alias match
                 if ord_col_clean in alias_to_expr:
                     order_target = exp.column(ord_col_clean)
-                # 2. Metric column match without alias (e.g. order by aggregate expr)
+                # 2. Metric alias lookup match
+                elif ord_col_clean in metric_col_to_alias:
+                    order_target = exp.column(metric_col_to_alias[ord_col_clean])
+                # 3. Metric column match without alias (e.g. order by aggregate expr)
                 elif ord_col_clean in metric_col_to_expr:
                     order_target = metric_col_to_expr[ord_col_clean]
                 else:
-                    # 3. Resolve column
+                    # 4. Resolve column
                     tbl, col = self._resolve_column(ord_col_clean, default_table=primary_table)
                     order_target = exp.column(col, tbl) if tbl else exp.column(col)
 
