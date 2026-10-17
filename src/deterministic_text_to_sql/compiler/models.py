@@ -71,9 +71,7 @@ class QueryIntent(BaseModel):
 
     primary_table: str
     dimensions: list[str] = Field(default_factory=list)
-    metrics: list[tuple[str, str] | tuple[str, str, str] | MetricSlot] = Field(
-        default_factory=list
-    )
+    metrics: list[tuple[str, str] | tuple[str, str, str] | MetricSlot] = Field(default_factory=list)
     filters: list[FilterSlot] = Field(default_factory=list)
     limit: int | None = None
     order_by: list[tuple[str, str] | OrderBySlot] = Field(default_factory=list)

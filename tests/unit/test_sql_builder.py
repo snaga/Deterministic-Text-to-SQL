@@ -41,9 +41,7 @@ def deduplicator() -> OntologyDeduplicator:
 
 
 @pytest.fixture
-def sql_builder(
-    schema_graph: SchemaGraph, deduplicator: OntologyDeduplicator
-) -> GenericSQLBuilder:
+def sql_builder(schema_graph: SchemaGraph, deduplicator: OntologyDeduplicator) -> GenericSQLBuilder:
     """Fixture providing GenericSQLBuilder configured with graph and deduplicator."""
     return GenericSQLBuilder(schema_graph=schema_graph, deduplicator=deduplicator)
 
@@ -81,9 +79,7 @@ class TestSingleTableAggregation:
         assert "JOIN" not in sql
         assert "GROUP BY" not in sql
 
-    def test_single_table_with_metric_slot_and_alias(
-        self, sql_builder: GenericSQLBuilder
-    ) -> None:
+    def test_single_table_with_metric_slot_and_alias(self, sql_builder: GenericSQLBuilder) -> None:
         intent = QueryIntent(
             primary_table="orders",
             metrics=[MetricSlot(column="o_totalprice", agg="SUM", alias="total_revenue")],
@@ -105,9 +101,7 @@ class TestSingleTableAggregation:
 class TestMultiHopJoinAggregation:
     """Tests for complex queries requiring multi-hop joins across relations."""
 
-    def test_customer_nation_region_aggregation(
-        self, sql_builder: GenericSQLBuilder
-    ) -> None:
+    def test_customer_nation_region_aggregation(self, sql_builder: GenericSQLBuilder) -> None:
         # Aggregating customer count by region: customer -> nation -> region
         intent = QueryIntent(
             primary_table="customer",
@@ -138,9 +132,7 @@ class TestMultiHopJoinAggregation:
 class TestOntologyDeduplicationIntegration:
     """Tests for queries combining parent-child ontology deduplication."""
 
-    def test_japan_and_asia_filters_prune_region_join(
-        self, sql_builder: GenericSQLBuilder
-    ) -> None:
+    def test_japan_and_asia_filters_prune_region_join(self, sql_builder: GenericSQLBuilder) -> None:
         # Both ASIA (parent) and JAPAN (child) filters are present.
         # Deduplicator should eliminate ASIA (region.r_name).
         # Since region is no longer referenced anywhere, region table should NOT be joined!
@@ -268,9 +260,7 @@ class TestMultiDialectTranspilation:
         intent = QueryIntent(
             primary_table="nation",
             dimensions=["n_name"],
-            filters=[
-                FilterSlot(table="region", column="r_name", operator="=", value="ASIA")
-            ],
+            filters=[FilterSlot(table="region", column="r_name", operator="=", value="ASIA")],
             limit=10,
         )
 
@@ -284,9 +274,7 @@ class TestMultiDialectTranspilation:
 class TestBuildErrorsAndValidation:
     """Tests for error handling on invalid schemas, columns, or inputs."""
 
-    def test_invalid_primary_table_raises_error(
-        self, sql_builder: GenericSQLBuilder
-    ) -> None:
+    def test_invalid_primary_table_raises_error(self, sql_builder: GenericSQLBuilder) -> None:
         intent = QueryIntent(primary_table="non_existent_table")
         with pytest.raises(SQLBuildError, match="does not exist in schema"):
             sql_builder.build(intent)
@@ -321,9 +309,7 @@ class TestBuildErrorsAndValidation:
         with pytest.raises(SQLBuildError, match="does not exist in any schema table"):
             sql_builder.build(intent)
 
-    def test_unsupported_filter_operator_raises_error(
-        self, sql_builder: GenericSQLBuilder
-    ) -> None:
+    def test_unsupported_filter_operator_raises_error(self, sql_builder: GenericSQLBuilder) -> None:
         intent = QueryIntent(
             primary_table="orders",
             filters=[
@@ -343,9 +329,7 @@ class TestBuildErrorsAndValidation:
         with pytest.raises(SQLBuildError, match="LIMIT cannot be negative"):
             sql_builder.build(intent)
 
-    def test_invalid_intent_type_raises_error(
-        self, sql_builder: GenericSQLBuilder
-    ) -> None:
+    def test_invalid_intent_type_raises_error(self, sql_builder: GenericSQLBuilder) -> None:
         with pytest.raises(SQLBuildError, match="Invalid intent type"):
             sql_builder.build(["not", "an", "intent"])  # type: ignore[arg-type]
 

@@ -164,9 +164,7 @@ class GenericSQLBuilder:
         """
         tbl_meta = self._schema.get_table(filter_slot.table)
         if tbl_meta is None:
-            raise SQLBuildError(
-                f"Filter table '{filter_slot.table}' does not exist in schema"
-            )
+            raise SQLBuildError(f"Filter table '{filter_slot.table}' does not exist in schema")
 
         col_meta = tbl_meta.get_column(filter_slot.column)
         if col_meta is None:
@@ -215,9 +213,7 @@ class GenericSQLBuilder:
             return exp.Not(this=exp.Is(this=col_expr, expression=exp.Null()))
         if op == "BETWEEN":
             if not isinstance(filter_slot.value, (list, tuple)) or len(filter_slot.value) != 2:
-                raise SQLBuildError(
-                    f"BETWEEN operator requires 2 values, got: {filter_slot.value}"
-                )
+                raise SQLBuildError(f"BETWEEN operator requires 2 values, got: {filter_slot.value}")
             return exp.Between(
                 this=col_expr,
                 low=self._to_literal(filter_slot.value[0]),
@@ -312,9 +308,7 @@ class GenericSQLBuilder:
             else:
                 tbl_name, col_name = self._resolve_column(m_col_clean, default_table=primary_table)
                 add_ref_table(tbl_name)
-                inner_expr = (
-                    exp.column(col_name, tbl_name) if tbl_name else exp.column(col_name)
-                )
+                inner_expr = exp.column(col_name, tbl_name) if tbl_name else exp.column(col_name)
 
             agg_node = exp.func(m_agg.strip().upper(), inner_expr)
             metric_col_to_expr[m_col_clean] = agg_node
@@ -361,25 +355,19 @@ class GenericSQLBuilder:
                     )
                     for fc, tc in step.join_pairs
                 ]
-                on_clause = (
-                    exp.and_(*step_conds) if len(step_conds) > 1 else step_conds[0]
-                )
+                on_clause = exp.and_(*step_conds) if len(step_conds) > 1 else step_conds[0]
             else:
                 try:
                     on_clause = sqlglot.parse_one(step.on_clause)
                 except Exception as e:
-                    raise SQLBuildError(
-                        f"Failed to parse ON clause '{step.on_clause}': {e}"
-                    ) from e
+                    raise SQLBuildError(f"Failed to parse ON clause '{step.on_clause}': {e}") from e
 
             query = query.join(target_table_node, on=on_clause)
 
         # Where clause
         if where_conditions:
             where_node = (
-                exp.and_(*where_conditions)
-                if len(where_conditions) > 1
-                else where_conditions[0]
+                exp.and_(*where_conditions) if len(where_conditions) > 1 else where_conditions[0]
             )
             query = query.where(where_node)
 
@@ -410,9 +398,7 @@ class GenericSQLBuilder:
                     order_target = metric_col_to_expr[ord_col_clean]
                 else:
                     # 3. Resolve column
-                    tbl, col = self._resolve_column(
-                        ord_col_clean, default_table=primary_table
-                    )
+                    tbl, col = self._resolve_column(ord_col_clean, default_table=primary_table)
                     order_target = exp.column(col, tbl) if tbl else exp.column(col)
 
                 order_nodes.append(exp.Ordered(this=order_target, desc=desc))
@@ -429,6 +415,4 @@ class GenericSQLBuilder:
         try:
             return query.sql(dialect=dialect, pretty=True)
         except Exception as e:
-            raise SQLBuildError(
-                f"Failed to transpile SQL query to dialect '{dialect}': {e}"
-            ) from e
+            raise SQLBuildError(f"Failed to transpile SQL query to dialect '{dialect}': {e}") from e
