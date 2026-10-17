@@ -12,8 +12,9 @@
 │       ├── engine.py            # コア統合エンジン（CLI/MCP非依存の純粋サービスクラス）
 │       ├── schema/              # セマンティックメタデータ定義 & Pydanticモデル
 │       │   ├── __init__.py
-│       │   ├── models.py        # テーブル/カラム/FKメタデータモデル
-│       │   └── loader.py        # JSON/YAMLスキーマローダー
+│       │   ├── models.py        # テーブル/カラム/FK/メトリクス/オントロジーモデル
+│       │   ├── loader.py        # 汎用スキーマローダー
+│       │   └── ossie.py         # Apache Ossie (YAML/JSON) アダプター & パーサー
 │       ├── graph/               # スキーマグラフ & JOIN探索
 │       │   ├── __init__.py
 │       │   └── resolver.py      # NetworkXによる最短パス・JOIN解決
@@ -32,7 +33,7 @@
 ├── tests/                       # ユニット・統合テスト
 │   ├── unit/                    # 各モジュールの単体テスト
 │   ├── integration/             # E2Eクエリ生成・回帰テスト
-│   └── fixtures/                # TPC-H スキーマやテストデータ
+│   └── fixtures/                # TPC-H スキーマ (JSON / Ossie YAML) やテストデータ
 ├── doc/                         # 🌍 公開用ドキュメント・仕様書マスター (Git管理)
 │   ├── adr/                     # アーキテクチャ決定レコード
 │   ├── product.md               # 製品概要・憲法

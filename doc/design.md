@@ -29,14 +29,15 @@
 
 | 機能カテゴリ | 機能ID | 機能名 | 概要 | 対応要件ID |
 |:------------|:-------|:------|:-----|:----------|
-| セマンティックメタデータ | F-META-01 | スキーマメタデータローダー | JSONスキーマからテーブル、カラム、役割、値域を検証・ロード | 要件 A-1 |
-| セマンティックメタデータ | F-META-02 | スキーマグラフ構築器 | 外部キー参照を有向/無向グラフとしてモデル化し保持 | 要件 A-2 |
-| スロット抽出 | F-JEV-01 | 超並列スロット抽出器 | 自然言語から主テーブル、軸、指標、フィルタを並列抽出 | 要件 B-1, E-1 |
-| スロット抽出 | F-JEV-02 | ホワイトリストChoiceバインダー | 固定区分値やコード値をメタデータの許容値へ厳格バインド | 要件 B-2 |
+| セマンティックメタデータ | F-META-01 | Apache Ossie & スキーマローダー | Apache Ossie（YAML/JSON）および独自JSONからデータセット、リレーション、メトリクスを検証・ロード | 要件 A-1, A-3 |
+| セマンティックメタデータ | F-META-02 | スキーマグラフ構築器 | Ossieのリレーションシップ定義から無向グラフ（NetworkX）を自動モデル化し保持 | 要件 A-2 |
+| セマンティックメタデータ | F-META-03 | オントロジーアダプター | Ossieの拡張領域から階層オントロジー（親子包含マッピング）を読み込み縮退器へ供給 | 要件 A-4 |
+| スロット抽出 | F-JEV-01 | メタデータ駆動スロット抽出器 | OssieメタデータからCriteriaを動的構築し、主テーブル、軸、指標、フィルタを並列抽出 | 要件 B-1, E-1 |
+| スロット抽出 | F-JEV-02 | 自然言語シノニムChoiceバインダー | Ossieの `ai_context.synonyms` および許容値から固定区分値やコード値へ厳格バインド | 要件 B-2 |
 | ASTコンパイル | F-COMP-01 | 最短経路JOINリゾルバー | スロット間の外部キー最短経路を探索し自動JOIN句を導出 | 要件 C-1 |
 | ASTコンパイル | F-COMP-02 | 階層オントロジー縮退器 | 親子階層フィルタの冗長親条件を自動縮退・削除 | 要件 C-2 |
-| ASTコンパイル | F-COMP-03 | 型安全ASTビルダー | sqlglotを用いてASTノードを構築し複数ダイアレクトへ変換 | 要件 C-3, E-2 |
-| HITL対話解決 | F-HITL-01 | 曖昧性検知 & 介入要求器 | 多重選択状態から曖昧クエリを検出しユーザー確認を発行 | 要件 D-1 |
+| ASTコンパイル | F-COMP-03 | 型安全ASTビルダー & メトリクス展開器 | sqlglotを用いてASTノードを構築し、Ossieメトリクス計算式を展開して複数ダイアレクトへ変換 | 要件 C-3, C-4, E-2 |
+| HITL対話解決 | F-HITL-01 | 動的曖昧性検知 & 介入要求器 | 多重選択競合や同一シノニムを持つ複数メトリクスから動的に選択肢を組み立て介入要求を発行 | 要件 D-1 |
 | HITL対話解決 | F-HITL-02 | スラッシュ構文パーサー | クエリ末尾のスラッシュ補足を解釈しコンテキスト合成再実行 | 要件 D-2 |
 | CLI / エージェント | F-CLI-02 | AIエージェント向け機械可読出力 | 完全構造化JSON出力モード（--json）とスキーマ自己検査 | 要件 D-3 |
 | CLI / 人間対話 | F-CLI-03 | 対話型インタラクティブモード (REPL) | 起動から依頼入力・HITL対話確認・SQL生成までを連続実行 | 要件 D-4 |
@@ -48,15 +49,20 @@
 
 ### 機能カテゴリ1: セマンティックメタデータ管理
 
-- **F-META-01: スキーマメタデータローダー**
-  - **概要**: JSON形式のセマンティックメタデータをPydanticモデルにマッピングし、厳格な型チェックとバリデーションを実施する。
-  - **対応要件**: 要件 A-1
-  - **設計のポイント**: カラムごとに `role`（`id`, `dimension`, `metric`, `fk`, `attribute`）と `agg`（集約関数候補 `SUM`, `AVG`, `COUNT` 等）を保持し、後続のJev判別用プロンプトとASTビルダーへ正確なコンテキストを提供する。
+- **F-META-01: Apache Ossie & スキーマローダー**
+  - **概要**: 業界標準である Apache Ossie (incubating) 形式（YAML / JSON）および JSON 形式のセマンティックメタデータをパースし、Pydantic モデルにマッピングして厳格な型バリデーションを実施する。
+  - **対応要件**: 要件 A-1, A-3
+  - **設計のポイント**: `datasets`, `fields`, `relationships`, `metrics` を透過的にロードし、後続のグラフ構築器、Jev判別プロンプト生成器、ASTビルダーへ一貫したデータモデルを提供する。
 
 - **F-META-02: スキーマグラフ構築器**
-  - **概要**: テーブル間の外部キー（FK）参照関係を `networkx.Graph` に登録し、テーブル結合の探索空間を構成する。
+  - **概要**: Ossie の `relationships`（`from`, `to`, `from_columns`, `to_columns`）に基づきテーブル間の結合関係を `networkx.Graph` に登録し、最短経路探索空間を構成する。
   - **対応要件**: 要件 A-2
-  - **設計のポイント**: 各エッジに結合条件（結合元テーブル.カラム = 参照先テーブル.カラム）を付加し、最短パスが求まった際に即座にSQLのON句を生成可能にする。
+  - **設計のポイント**: 単一外部キーだけでなく複合キーリレーションシップをサポートし、各エッジに等価結合条件を付加して最短パスから即座に SQL ON 句を生成可能にする。
+
+- **F-META-03: オントロジーアダプター**
+  - **概要**: Ossie の `custom_extensions`（`vendor_name: "DETERMINISTIC_TEXT_TO_SQL"`）に定義された階層オントロジー（`hierarchies`）から親子関係と値包含マッピング（例: `JAPAN -> ASIA`）を抽出する。
+  - **対応要件**: 要件 A-4
+  - **設計のポイント**: メタデータからオントロジー縮退器（`OntologyDeduplicator`）へルールを自動注入し、コード側のハードコードを不要にする。
 
 ### 機能カテゴリ2: Jevスロット抽出 & 判別連携
 
@@ -137,11 +143,14 @@ graph TD
     Agent["🤖 AI エージェント"] --> CLI
     Agent -.->|将来の拡張| MCP["🔌 MCP サーバー (Future MCP Tool)"]
     
+    OssieDoc["📄 Apache Ossie 定義 (YAML / JSON)"] --> OssieAdapter["🔌 OssieSchemaAdapter (ossie.py)"]
+    OssieAdapter --> SchemaModel["📦 SchemaMetadata (models.py)"]
+    
     CLI --> Engine["⚙️ DeterministicTextToSQLEngine (engine.py)"]
     MCP -.-> Engine
     
     subgraph CoreEngine ["Deterministic Text-to-SQL Engine"]
-        Engine --> SchemaLoader["📂 SchemaLoader (models.py, loader.py)"]
+        Engine --> SchemaModel
         Engine --> SchemaGraph["🕸️ SchemaGraph (resolver.py)"]
         Engine --> JevClient["⚡ JevClient (client.py, slots.py)"]
         Engine --> HITL["🛡️ HITLManager (feedback.py)"]
@@ -280,16 +289,44 @@ TyperおよびRichによる対話的CLIツールを提供します。ワンシ�
 - **出力 (Output)**:
   - `str` (フォーマット済み型安全SQL文字列)
 
-### データ仕様 (スキーマメタデータ JSON)
-- **フォーマット**: JSON (UTF-8)
+### データ仕様 (Apache Ossie セマンティックモデル & スキーマメタデータ)
+
+#### 1. Apache Ossie セマンティックモデル仕様 (推奨: YAML / JSON)
+- **フォーマット**: YAML または JSON (UTF-8)
+- **仕様バージョン**: `0.2.0.dev0`
+- **主要フィールド構成**:
+  - `version`: str (`0.2.0.dev0`)
+  - `name`: str (セマンティックモデル識別子)
+  - `description`: str (モデル説明)
+  - `ai_context`: Dict / str (AI向け指示・コンテキスト)
+  - `datasets`: List[Dict] (論理データセット定義)
+    - `name`: str (論理名)
+    - `source`: str (物理テーブル名)
+    - `primary_key`: List[str] (主キー)
+    - `description`: str (説明)
+    - `ai_context`: Dict (`synonyms`: List[str] 自然言語類義語)
+    - `fields`: List[Dict] (`name`, `expression.dialects`, `datatype`, `dimension.is_time`, `ai_context.synonyms`)
+  - `relationships`: List[Dict] (外部キー関係定義)
+    - `name`: str (リレーション名)
+    - `from`: str (多側データセット名)
+    - `to`: str (一側データセット名)
+    - `from_columns`: List[str] (FKカラム)
+    - `to_columns`: List[str] (参照先PKカラム)
+  - `metrics`: List[Dict] (セマンティック集約指標)
+    - `name`: str (メトリクス識別子)
+    - `expression.dialects`: List[Dict] (`dialect: ANSI_SQL`, `expression`: 計算式 e.g. `SUM(...)`)
+    - `description`: str (説明)
+    - `datatype`: str (戻り値型)
+    - `ai_context`: Dict (`synonyms`: List[str] 指標の自然言語シノニム)
+  - `custom_extensions`: List[Dict] (`vendor_name: "DETERMINISTIC_TEXT_TO_SQL"`, `data`: 階層オントロジー `hierarchies` JSON)
+
+#### 2. 内部スキーマモデル (`SchemaMetadata`)
 - **構成**:
-  - `tables`: リスト（テーブル定義）
-    - `name`: str (テーブル物理名)
-    - `description`: str (テーブル論理説明)
-    - `aliases`: List[str] (自然言語エイリアス)
-    - `primary_key`: List[str] (PKカラム名)
-    - `foreign_keys`: List[Dict] (`column`, `ref_table`, `ref_column`)
-    - `columns`: List[Dict] (`name`, `type`, `description`, `role`, `agg`, `values`)
+  - `title`: str
+  - `description`: str
+  - `tables`: List[TableMetadata] (テーブル物理定義、PK、FK、カラム一覧)
+  - `metrics`: List[MetricMetadata] (メトリクス名、計算式、シノニム)
+  - `hierarchies`: List[HierarchyRule] (階層オントロジー親子マッピング)
 
 ---
 
@@ -306,39 +343,48 @@ classDiagram
         -hitl_manager: HITLManager
         -deduplicator: OntologyDeduplicator
         -sql_builder: GenericSQLBuilder
-        +__init__(schema_path: Path, jev_api_key: Optional[str])
+        +__init__(schema: Union~SchemaMetadata, Path, str, dict~, jev_client: Optional~JevClient~)
         +process_query(query: str, dialect: str, clarify: Optional[str], force: bool) EngineResult
         +get_schema_info() Dict
     }
 
+    class OssieSchemaAdapter {
+        +load_from_yaml(path: Path) SchemaMetadata
+        +load_from_dict(data: dict) SchemaMetadata
+    }
+
     class SchemaLoader {
         +load_from_json(path: Path) SchemaMetadata
+        +load_from_dict(data: dict) SchemaMetadata
     }
 
     class SchemaGraph {
         -graph: nx.Graph
-        +__init__(metadata: SchemaMetadata)
+        +__init__(schema: SchemaMetadata)
         +find_shortest_path(source: str, targets: List[str]) List~JoinStep~
+        +resolve_joins(primary: str, targets: List[str]) List~JoinStep~
     }
 
     class JevClient {
         -client: httpx.Client
         -api_key: str
-        +extract_slots(query: str, schema: SchemaMetadata) RawSlots
+        +extract_slots(query: str, schema: Optional~SchemaMetadata~) ParsedSlots
     }
 
     class HITLManager {
-        +detect_issue(slots: RawSlots) Optional~HITLIssue~
-        +synthesize_clarification(base: str, clarify: str) str
+        +parse_input(raw: str, clarify: Optional[str]) ParsedQueryInput
+        +check_ambiguity(slots: ParsedSlots, clarification: Optional[str]) Optional~HITLIssue~
+        +synthesize_eval_state(base: str, clarification: Optional[str]) str
     }
 
     class OntologyDeduplicator {
+        -rules: List~HierarchyRule~
         +deduplicate(filters: List~FilterSlot~) List~FilterSlot~
     }
 
     class GenericSQLBuilder {
         -schema_graph: SchemaGraph
-        +__init__(graph: SchemaGraph)
+        -deduplicator: Optional~OntologyDeduplicator~
         +build(intent: QueryIntent, dialect: str) str
     }
 
@@ -347,7 +393,8 @@ classDiagram
     DeterministicTextToSQLEngine --> HITLManager
     DeterministicTextToSQLEngine --> OntologyDeduplicator
     DeterministicTextToSQLEngine --> GenericSQLBuilder
-    SchemaGraph --> SchemaLoader
+    DeterministicTextToSQLEngine ..> OssieSchemaAdapter
+    DeterministicTextToSQLEngine ..> SchemaLoader
 ```
 
 ### クラス詳細仕様 (IPO)
@@ -355,13 +402,14 @@ classDiagram
 | クラス名 | メソッド名 | 入力 (Input) | 処理概要 (Processing) | 出力 (Output) |
 |:---------|:-----------|:-------------|:----------------------|:--------------|
 | `DeterministicTextToSQLEngine` | `process_query` | `query: str, dialect: str, clarify: Optional[str], force: bool` | スロット抽出からHITL判定、JOIN解決、ASTビルドまでのE2E実行 | `EngineResult` (成功/HITL要求/エラー) |
-| `DeterministicTextToSQLEngine` | `get_schema_info` | なし | 登録されているテーブル・カラム・エイリアス情報の辞書化 | `Dict[str, Any]` |
-| `SchemaLoader` | `load_from_json` | `path: Path` | JSONパース及びPydanticバリデーション | `SchemaMetadata` |
-| `SchemaGraph` | `find_shortest_path` | `source: str, targets: List[str]` | NetworkX 最短パス探索とON句生成 | `List[JoinStep]` |
-| `JevClient` | `extract_slots` | `query: str, schema: SchemaMetadata` | Jev API呼び出しとスロット辞書化 | `RawSlots` |
-| `HITLManager` | `detect_issue` | `slots: RawSlots` | 多重選択競合の検知 | `Optional[HITLIssue]` |
-| `OntologyDeduplicator` | `deduplicate` | `filters: List[FilterSlot]` | 親子オントロジーに基づく冗長親条件除外 | `List[FilterSlot]` |
-| `GenericSQLBuilder` | `build` | `intent: QueryIntent, dialect: str` | sqlglot AST構築とトランスパイル | `str` (SQL文字列) |
+| `DeterministicTextToSQLEngine` | `get_schema_info` | なし | 登録されているテーブル・カラム・メトリクス情報の辞書化 | `Dict[str, Any]` |
+| `OssieSchemaAdapter` | `load_from_yaml` | `path: Path` | Apache Ossie YAMLのパース、バリデーション、内部モデルへの正規化変換 | `SchemaMetadata` |
+| `SchemaLoader` | `load_from_json` | `path: Path` | 独自JSONパース及びPydanticバリデーション | `SchemaMetadata` |
+| `SchemaGraph` | `resolve_joins` | `primary: str, targets: List[str]` | NetworkX 最短パス探索と重複のないJOINステップリスト生成 | `List[JoinStep]` |
+| `JevClient` | `extract_slots` | `query: str, schema: Optional[SchemaMetadata]` | メタデータ駆動プロンプト構築、Jev API呼び出しとスロット解析 | `ParsedSlots` |
+| `HITLManager` | `check_ambiguity` | `slots: ParsedSlots, clarification: Optional[str]` | 多重選択競合や拮抗確率の検知と動的HITLIssue生成 | `Optional[HITLIssue]` |
+| `OntologyDeduplicator` | `deduplicate` | `filters: List[FilterSlot]` | 親子オントロジーに基づく冗長親条件除外 (Subsumption) | `List[FilterSlot]` |
+| `GenericSQLBuilder` | `build` | `intent: QueryIntent, dialect: str` | sqlglot AST構築（メトリクス展開含む）とダイアレクトトランスパイル | `str` (SQL文字列) |
 
 ---
 

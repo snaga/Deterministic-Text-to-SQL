@@ -4,6 +4,8 @@
 - **Python 3.11+**: 型ヒントの充実、高速化、豊富なエコシステムを活用した型安全設計
 
 ## 🏗️ フレームワーク & ライブラリ
+- **セマンティック標準仕様**: `Apache Ossie (incubating) v0.2.0.dev0` - ベンダー非依存のオープン標準セマンティックモデル仕様（YAML / JSON）
+- **YAML パーサー**: `pyyaml` (v6+) - Apache Ossie セマンティック定義ファイルの高速かつ安全なロード
 - **SQL AST コンパイラ**: `sqlglot` (v25+) - 構文木（AST）の構築、最適化、PostgreSQL/DuckDB/SQLite/BigQuery/Snowflake 等へのダイアレクト別トランスパイル
 - **グラフ探索エンジン**: `networkx` (v3+) - 外部キー（FK）関係のグラフモデリング、最短経路（Dijkstra/BFS）および Steiner Tree 近似探索
 - **スキーマ & データバリデーション**: `pydantic` (v2+) - セマンティックメタデータ（テーブル・カラム・ロール・値域・リレーション）の型安全な定義とバリデーション
