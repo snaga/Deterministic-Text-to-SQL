@@ -4,7 +4,7 @@
 - **Python 3.11+**: 型ヒントの充実、高速化、豊富なエコシステムを活用した型安全設計
 
 ## 🏗️ フレームワーク & ライブラリ
-- **SQL AST コンパイラ**: `sqlglot` (v25+) - 構文木（AST）の構築、最適化、PostgreSQL/BigQuery/Snowflake/DuckDB 等へのダイアレクト別トランスパイル
+- **SQL AST コンパイラ**: `sqlglot` (v25+) - 構文木（AST）の構築、最適化、PostgreSQL/DuckDB/SQLite/BigQuery/Snowflake 等へのダイアレクト別トランスパイル
 - **グラフ探索エンジン**: `networkx` (v3+) - 外部キー（FK）関係のグラフモデリング、最短経路（Dijkstra/BFS）および Steiner Tree 近似探索
 - **スキーマ & データバリデーション**: `pydantic` (v2+) - セマンティックメタデータ（テーブル・カラム・ロール・値域・リレーション）の型安全な定義とバリデーション
 - **HTTP クライアント**: `httpx` (v0.27+) - TypeSafe Jev API への高速な接続（Keep-Alive、接続プール、同期/非同期クライアント）
@@ -23,7 +23,7 @@
 
 ## 📦 インフラ / プラットフォーム
 - **実行環境**: クロスプラットフォーム（Linux, macOS, Windows）ローカルCLIおよびコンテナ実行（Docker）
-- **データベース接続（検証用）**: `duckdb` (組込み分析エンジン) / `psycopg2-binary` (PostgreSQL接続)
+- **データベース接続（検証用）**: `sqlite3` (Python標準) / `duckdb` (組込み分析エンジン) / `psycopg2-binary` (PostgreSQL接続)
 
 ## 🔗 外部API / サービス
 - **TypeSafe Jev API**: `POST /v1/systemone`, `GET /v1/models` - 超高速（<30ms）System 1 判別エンジン。クエリからのスロット抽出・HITL曖昧性検知を実行。

@@ -84,7 +84,7 @@
 - **F-COMP-03: 型安全ASTビルダー**
   - **概要**: `sqlglot.expressions` を用いて、`Select`, `From`, `Join`, `Where`, `Group`, `Order`, `Limit` ノードを純粋関数として組み立てる。
   - **対応要件**: 要件 C-3, E-2
-  - **設計のポイント**: 文字列結合を一切行わず、AST構造体としてSQLを生成。指定ダイアレクト（PostgreSQL, BigQuery, Snowflake, DuckDB等）へのトランスパイルを行う。
+  - **設計のポイント**: 文字列結合を一切行わず、AST構造体としてSQLを生成。指定ダイアレクト（PostgreSQL, DuckDB, SQLite, BigQuery, Snowflake等）へのトランスパイルを行う。
 
 ### 機能カテゴリ4: Human-in-the-Loop (HITL) 対話解決
 
@@ -148,7 +148,7 @@ graph TD
     
     subgraph External ["外部サービス & データベース"]
         JevAPI["☁️ TypeSafe Jev API (POST /v1/systemone)"]
-        DB["🗄️ Database (DuckDB / PostgreSQL / Snowflake)"]
+        DB["🗄️ Database (DuckDB / SQLite / PostgreSQL / Snowflake)"]
     end
     
     JevClient -.->|HTTP Keep-Alive <30ms| JevAPI
@@ -222,7 +222,7 @@ TyperおよびRichによる対話的CLIツールを提供します。
 - **入力**:
   - `query` (str, 必須): 自然言語クエリ（スラッシュ構文 `query / 補足` を含む）
   - `--schema` (Path, オプション): セマンティックメタデータJSONパス
-  - `--dialect` (str, デフォルト: `postgres`): SQLダイアレクト (`postgres`, `duckdb`, `snowflake`, `bigquery`)
+  - `--dialect` (str, デフォルト: `postgres`): SQLダイアレクト (`postgres`, `duckdb`, `sqlite`, `snowflake`, `bigquery`)
   - `--clarify` (str, オプション): HITL選択補足キー (`A`, `B` 等)
   - `--json` (bool, デフォルト: `False`): JSON形式での結果出力
   - `--execute` (bool, デフォルト: `False`): 生成SQLを接続先DBで即座に実行

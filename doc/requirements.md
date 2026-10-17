@@ -62,9 +62,9 @@
 
 - 要件 C-3: 複数SQLダイアレクトへの型安全ASTトランスパイル
   - ユーザーストーリー:
-    - 私はマルチクラウド環境の開発者として、生成されたSQLをPostgreSQL、DuckDB、Snowflake、BigQueryなどの指定データベースでエラーなく実行したい。なぜならデータベースエンジンごとの方言（Dialect）の差異を吸収するためだ。
+    - 私はマルチクラウドおよびローカル環境の開発者として、生成されたSQLをPostgreSQL、DuckDB、SQLite、Snowflake、BigQueryなどの指定データベースでエラーなく実行したい。なぜならデータベースエンジンごとの方言（Dialect）の差異を吸収するためだ。
   - 受け入れ基準:
-    - [Event-driven] スロットとJOINパスが解決されたとき、システムはsqlglotを用いて抽象構文木（AST）を組み立て、ユーザーが指定したSQLダイアレクトに準拠したフォーマット済みSQL文字列を出力しなければならない。
+    - [Event-driven] スロットとJOINパスが解決されたとき、システムはsqlglotを用いて抽象構文木（AST）を組み立て、ユーザーが指定したSQLダイアレクト（PostgreSQL, DuckDB, SQLite, Snowflake, BigQuery等）に準拠したフォーマット済みSQL文字列を出力しなければならない。
     - [Ubiquitous] システムが生成するSQLは、常に構文的に正しく、存在しないテーブルやカラムを含んではならない。
 
 ### 要件カテゴリD: Human-in-the-Loop (HITL) & 対話型CLI (Interaction)
