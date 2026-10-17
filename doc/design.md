@@ -7,6 +7,7 @@
   - [2.2 機能カテゴリ2: Jevスロット抽出 & 判別連携](#機能カテゴリ2-jevスロット抽出--判別連携)
   - [2.3 機能カテゴリ3: 決定論的JOIN解決 & AST生成](#機能カテゴリ3-決定論的join解決--ast生成)
   - [2.4 機能カテゴリ4: Human-in-the-Loop (HITL) 対話解決](#機能カテゴリ4-human-in-the-loop-hitl-対話解決)
+  - [2.5 機能カテゴリ5: CLI・エージェント連携 & コアエンジン](#機能カテゴリ5-cliエージェント連携--コアエンジン)
 - [3. アーキテクチャ](#アーキテクチャ)
   - [3.1 設計方針](#設計方針)
   - [3.2 全体構成図](#全体構成図)
@@ -37,6 +38,8 @@
 | ASTコンパイル | F-COMP-03 | 型安全ASTビルダー | sqlglotを用いてASTノードを構築し複数ダイアレクトへ変換 | 要件 C-3, E-2 |
 | HITL対話解決 | F-HITL-01 | 曖昧性検知 & 介入要求器 | 多重選択状態から曖昧クエリを検出しユーザー確認を発行 | 要件 D-1 |
 | HITL対話解決 | F-HITL-02 | スラッシュ構文パーサー | クエリ末尾のスラッシュ補足を解釈しコンテキスト合成再実行 | 要件 D-2 |
+| CLI / エージェント | F-CLI-02 | AIエージェント向け機械可読出力 | 完全構造化JSON出力モード（--json）とスキーマ自己検査 | 要件 D-3 |
+| コアエンジン | F-CORE-01 | 統合エンジン (MCP対応設計) | CLI/MCP非依存の純粋サービスクラス。将来のMCPツール化を担保 | 要件 E-3 |
 
 ---
 
@@ -95,6 +98,18 @@
   - **対応要件**: 要件 D-2
   - **設計のポイント**: ユーザーが元のクエリを打ち直すことなく、最短の手数で曖昧性を解消できるようにする。
 
+### 機能カテゴリ5: CLI・エージェント連携 & コアエンジン
+
+- **F-CLI-02: AIエージェント向け機械可読出力 & スキーマ自己検査**
+  - **概要**: AIエージェントからのCLI呼び出しに対応し、完全な構造化JSON出力モード（`--json`）および登録スキーマの自己検査機能（`schema` サブコマンド）を提供する。
+  - **対応要件**: 要件 D-3
+  - **設計のポイント**: 人間向けRich装飾のない純粋なJSON（status, sql, hitl_summary, latency_ms）を出力し、エージェントが結果をそのままパースしてツール実行できるようにする。
+
+- **F-CORE-01: 統合エンジン (DeterministicTextToSQLEngine)**
+  - **概要**: CLIやMCPなどの外部フレームワークから完全に独立したコアサービスクラス。スキーマロード、スロット抽出、HITL判定、グラフ探索、ASTビルドを統合オーケストレーションする。
+  - **対応要件**: 要件 E-3
+  - **設計のポイント**: 将来のMCPツール化（FastMCPやmcp-pythonなど）の際、MCPツールハンドラーから `engine.generate_sql(query, ...)` を1行呼び出すだけで連携可能とする。
+
 ---
 
 ## アーキテクチャ
@@ -104,20 +119,27 @@
 2. **型安全性の数学的保証 (Type Safety & Hallucination-Free)**: スキーマ定義とASTノードの型安全性を活用し、存在しないテーブル・カラムの幻覚やSQL構文エラーを 0 件にする。
 3. **超低遅延パイプライン (Sub-100ms Latency)**: Jev API（<30ms）＋ グラフ探索（<1ms）＋ ASTコンパイル（<3ms）により、全体レイテンシを100ms未満で処理する。
 4. **Human-in-the-Loop ファースト (HITL by Design)**: 曖昧性があるときは無理に推測せず、ユーザーに選択肢を提示して安全に確定させる。
+5. **将来のMCP化を見据えた脱結合 (MCP-Ready Decoupled Architecture)**: CLI表示層とコアロジックを厳格に分離し、コアエンジン `DeterministicTextToSQLEngine` は純粋Pythonオブジェクトとしてあらゆるクライアント（CLI / MCP Server / FastAPI / Python SDK）から再利用可能にする。
 
 ### 全体構成図
-以下の図は、入力された自然言語クエリが各コンポーネントを経て型安全なSQLへコンパイルされる静的構成と依存関係を示しています。
+以下の図は、入力された自然言語クエリが各コンポーネントを経て型安全なSQLへコンパイルされる静的構成と依存関係を示しています。CLIと将来のMCPサーバーの双方が同一のコアエンジンを利用可能な構造です。
 
 ```mermaid
 graph TD
-    User["👤 ユーザー / クライアント"] --> CLI["💻 CLI / API エントリポイント (cli.py)"]
+    User["👤 人間ユーザー / 開発者"] --> CLI["💻 CLI エントリポイント (cli.py)"]
+    Agent["🤖 AI エージェント"] --> CLI
+    Agent -.->|将来の拡張| MCP["🔌 MCP サーバー (Future MCP Tool)"]
+    
+    CLI --> Engine["⚙️ DeterministicTextToSQLEngine (engine.py)"]
+    MCP -.-> Engine
     
     subgraph CoreEngine ["Deterministic Text-to-SQL Engine"]
-        SchemaLoader["📂 SchemaLoader (models.py, loader.py)"] --> SchemaGraph["🕸️ SchemaGraph (resolver.py)"]
-        CLI --> JevClient["⚡ JevClient (client.py, slots.py)"]
-        JevClient --> HITL["🛡️ HITLManager (feedback.py)"]
+        Engine --> SchemaLoader["📂 SchemaLoader (models.py, loader.py)"]
+        Engine --> SchemaGraph["🕸️ SchemaGraph (resolver.py)"]
+        Engine --> JevClient["⚡ JevClient (client.py, slots.py)"]
+        Engine --> HITL["🛡️ HITLManager (feedback.py)"]
         
-        HITL -->|曖昧性解消 / 確定Intent| Deduplicator["✂️ OntologyDeduplicator (deduplicator.py)"]
+        HITL -->|確定Intent| Deduplicator["✂️ OntologyDeduplicator (deduplicator.py)"]
         Deduplicator --> PathResolver["🔍 PathResolver (resolver.py)"]
         SchemaGraph --> PathResolver
         
@@ -130,7 +152,8 @@ graph TD
     end
     
     JevClient -.->|HTTP Keep-Alive <30ms| JevAPI
-    SQLBuilder -->|Transpiled SQL| CLI
+    SQLBuilder -->|Transpiled SQL| Engine
+    Engine --> CLI
     CLI -->|実行または出力| DB
 ```
 
@@ -250,6 +273,17 @@ TyperおよびRichによる対話的CLIツールを提供します。
 
 ```mermaid
 classDiagram
+    class DeterministicTextToSQLEngine {
+        -schema_graph: SchemaGraph
+        -jev_client: JevClient
+        -hitl_manager: HITLManager
+        -deduplicator: OntologyDeduplicator
+        -sql_builder: GenericSQLBuilder
+        +__init__(schema_path: Path, jev_api_key: Optional[str])
+        +process_query(query: str, dialect: str, clarify: Optional[str], force: bool) EngineResult
+        +get_schema_info() Dict
+    }
+
     class SchemaLoader {
         +load_from_json(path: Path) SchemaMetadata
     }
@@ -281,16 +315,20 @@ classDiagram
         +build(intent: QueryIntent, dialect: str) str
     }
 
+    DeterministicTextToSQLEngine --> SchemaGraph
+    DeterministicTextToSQLEngine --> JevClient
+    DeterministicTextToSQLEngine --> HITLManager
+    DeterministicTextToSQLEngine --> OntologyDeduplicator
+    DeterministicTextToSQLEngine --> GenericSQLBuilder
     SchemaGraph --> SchemaLoader
-    GenericSQLBuilder --> SchemaGraph
-    GenericSQLBuilder --> OntologyDeduplicator
-    HITLManager --> JevClient
 ```
 
 ### クラス詳細仕様 (IPO)
 
 | クラス名 | メソッド名 | 入力 (Input) | 処理概要 (Processing) | 出力 (Output) |
 |:---------|:-----------|:-------------|:----------------------|:--------------|
+| `DeterministicTextToSQLEngine` | `process_query` | `query: str, dialect: str, clarify: Optional[str], force: bool` | スロット抽出からHITL判定、JOIN解決、ASTビルドまでのE2E実行 | `EngineResult` (成功/HITL要求/エラー) |
+| `DeterministicTextToSQLEngine` | `get_schema_info` | なし | 登録されているテーブル・カラム・エイリアス情報の辞書化 | `Dict[str, Any]` |
 | `SchemaLoader` | `load_from_json` | `path: Path` | JSONパース及びPydanticバリデーション | `SchemaMetadata` |
 | `SchemaGraph` | `find_shortest_path` | `source: str, targets: List[str]` | NetworkX 最短パス探索とON句生成 | `List[JoinStep]` |
 | `JevClient` | `extract_slots` | `query: str, schema: SchemaMetadata` | Jev API呼び出しとスロット辞書化 | `RawSlots` |

@@ -9,6 +9,7 @@
 │   └── deterministic_text_to_sql/
 │       ├── __init__.py
 │       ├── cli.py               # Typer CLI エントリポイント
+│       ├── engine.py            # コア統合エンジン（CLI/MCP非依存の純粋サービスクラス）
 │       ├── schema/              # セマンティックメタデータ定義 & Pydanticモデル
 │       │   ├── __init__.py
 │       │   ├── models.py        # テーブル/カラム/FKメタデータモデル
