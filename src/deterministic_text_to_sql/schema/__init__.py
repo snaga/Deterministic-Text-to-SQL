@@ -6,8 +6,10 @@ from deterministic_text_to_sql.schema.exceptions import (
 )
 from deterministic_text_to_sql.schema.loader import (
     SchemaLoader,
+    load_schema,
     load_schema_from_dict,
     load_schema_from_json,
+    load_schema_from_yaml,
 )
 from deterministic_text_to_sql.schema.models import (
     ColumnMetadata,
@@ -18,6 +20,7 @@ from deterministic_text_to_sql.schema.models import (
     SchemaMetadata,
     TableMetadata,
 )
+from deterministic_text_to_sql.schema.ossie import OssieSchemaAdapter
 
 __all__ = [
     "ColumnMetadata",
@@ -25,11 +28,14 @@ __all__ = [
     "ForeignKeyMetadata",
     "HierarchyRule",
     "MetricDefinition",
+    "OssieSchemaAdapter",
     "SchemaError",
     "SchemaLoader",
     "SchemaMetadata",
     "SchemaValidationError",
     "TableMetadata",
+    "load_schema",
     "load_schema_from_dict",
     "load_schema_from_json",
+    "load_schema_from_yaml",
 ]
