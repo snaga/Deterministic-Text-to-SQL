@@ -89,23 +89,25 @@ def resolve_schema_path(schema_arg: Path | None = None) -> Path:
             raise FileNotFoundError(f"Specified schema file does not exist: {schema_arg}")
         return p
 
-    # 1. Bundled package fixture
-    bundled = Path(__file__).resolve().parent / "fixtures" / "tpch_schema.json"
-    if bundled.is_file():
-        return bundled
+    # Search candidates in priority order:
+    # 1. TPC-H Ossie YAML
+    # 2. TPC-H legacy JSON schema
+    search_candidates = [
+        Path.cwd() / "tests" / "fixtures" / "tpch_ossie.yaml",
+        Path.cwd() / "tpch_ossie.yaml",
+        Path(__file__).resolve().parent / "fixtures" / "tpch_ossie.yaml",
+        Path(__file__).resolve().parent / "fixtures" / "tpch_schema.json",
+        Path.cwd() / "tpch_schema.json",
+        Path.cwd() / "tests" / "fixtures" / "tpch_schema.json",
+    ]
 
-    # 2. Current working directory
-    cwd_schema = Path.cwd() / "tpch_schema.json"
-    if cwd_schema.is_file():
-        return cwd_schema
-
-    # 3. Test fixtures directory
-    repo_fixture = Path.cwd() / "tests" / "fixtures" / "tpch_schema.json"
-    if repo_fixture.is_file():
-        return repo_fixture
+    for candidate in search_candidates:
+        if candidate.is_file():
+            return candidate.resolve()
 
     raise FileNotFoundError(
-        "Schema file not found. Please provide --schema <path> or ensure tpch_schema.json exists."
+        "Schema file not found. Please provide --schema <path> or "
+        "ensure tpch_ossie.yaml or tpch_schema.json exists."
     )
 
 
@@ -546,6 +548,50 @@ def schema_command(
             console.print(
                 Text.from_markup("[dim]Foreign Keys:\n" + "\n".join(fk_lines) + "[/]\n")
             )
+
+    # Semantic Metrics
+    metrics = info.get("metrics", [])
+    if metrics:
+        metrics_table = Table(
+            title="[bold green]Semantic Metrics[/]",
+            box=box.SIMPLE_HEAVY,
+            show_header=True,
+            header_style="bold green",
+        )
+        metrics_table.add_column("Metric Name", style="bold white")
+        metrics_table.add_column("Expression", style="cyan", overflow="fold")
+        metrics_table.add_column("Description", style="white", overflow="fold")
+        metrics_table.add_column("Synonyms", style="dim", overflow="fold")
+
+        for m in metrics:
+            syns = ", ".join(m.get("synonyms", []))
+            metrics_table.add_row(
+                m["name"],
+                m["expression"],
+                m.get("description", ""),
+                syns,
+            )
+        console.print(metrics_table)
+
+    # Ontology Hierarchies
+    hierarchies = info.get("hierarchies", [])
+    if hierarchies:
+        hier_table = Table(
+            title="[bold yellow]Ontology Hierarchies[/]",
+            box=box.SIMPLE_HEAVY,
+            show_header=True,
+            header_style="bold yellow",
+        )
+        hier_table.add_column("Parent", style="bold white")
+        hier_table.add_column("Child", style="bold white")
+        hier_table.add_column("Mapping Count", style="dim")
+
+        for h in hierarchies:
+            parent_repr = f"{h['parent_table']}.{h['parent_column']}"
+            child_repr = f"{h['child_table']}.{h['child_column']}"
+            mapping_count = str(len(h.get("child_to_parent", {})))
+            hier_table.add_row(parent_repr, child_repr, mapping_count)
+        console.print(hier_table)
 
     raise typer.Exit(code=0)
 

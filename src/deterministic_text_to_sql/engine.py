@@ -23,10 +23,11 @@ from deterministic_text_to_sql.jev.client import JevClient
 from deterministic_text_to_sql.jev.models import ParsedSlots
 from deterministic_text_to_sql.models import EngineResult, EngineStatus, LatencyMetrics
 from deterministic_text_to_sql.schema.loader import (
+    load_schema,
     load_schema_from_dict,
-    load_schema_from_json,
 )
 from deterministic_text_to_sql.schema.models import SchemaMetadata
+from deterministic_text_to_sql.schema.ossie import OssieSchemaAdapter
 
 
 def _build_intent_from_slots(slots: ParsedSlots, schema: SchemaMetadata) -> QueryIntent:
@@ -70,9 +71,21 @@ def _build_intent_from_slots(slots: ParsedSlots, schema: SchemaMetadata) -> Quer
 
     # 3. Metrics Resolution
     metrics: list[tuple[str, str] | tuple[str, str, str] | MetricSlot] = []
-    metric_str = slots.metric.strip().lower()
+    raw_metric_str = slots.metric.strip()
+    metric_str = raw_metric_str.lower()
 
-    if metric_str in ("sum_revenue", "revenue"):
+    # Step 3.1: Check semantic metrics defined in schema
+    metric_def = schema.get_metric(raw_metric_str) or schema.get_metric(metric_str)
+    if metric_def is not None:
+        metrics.append(
+            MetricSlot(
+                column=metric_def.name,
+                alias=metric_def.name,
+                expression=metric_def.expression,
+            )
+        )
+    # Step 3.2: Fallback heuristics for backwards compatibility
+    elif metric_str in ("sum_revenue", "revenue"):
         # Determine whether orders.o_totalprice or lineitem.l_extendedprice applies
         sec_str = slots.secondary_table.lower() if slots.secondary_table else "none"
         if primary_table == "orders" or sec_str == "orders":
@@ -220,21 +233,25 @@ class DeterministicTextToSQLEngine:
         if isinstance(schema, SchemaMetadata):
             self._schema = schema
         elif isinstance(schema, dict):
-            self._schema = load_schema_from_dict(schema)
-        elif isinstance(schema, Path):
-            self._schema = load_schema_from_json(schema)
-        elif isinstance(schema, str):
-            p = Path(schema)
+            if "datasets" in schema:
+                self._schema = OssieSchemaAdapter.load_from_dict(schema)
+            else:
+                self._schema = load_schema_from_dict(schema)
+        elif isinstance(schema, (Path, str)):
+            p = Path(schema) if isinstance(schema, str) else schema
             if p.exists() and p.is_file():
-                self._schema = load_schema_from_json(p)
-            elif schema.strip().startswith("{"):
+                self._schema = load_schema(p)
+            elif isinstance(schema, str) and schema.strip().startswith("{"):
                 try:
                     data = json.loads(schema)
-                    self._schema = load_schema_from_dict(data)
+                    if isinstance(data, dict) and "datasets" in data:
+                        self._schema = OssieSchemaAdapter.load_from_dict(data)
+                    else:
+                        self._schema = load_schema_from_dict(data)
                 except json.JSONDecodeError:
-                    self._schema = load_schema_from_json(schema)
+                    self._schema = load_schema(schema)
             else:
-                self._schema = load_schema_from_json(schema)
+                self._schema = load_schema(schema)
         else:
             raise TypeError(f"Unsupported schema type: {type(schema).__name__}")
 
@@ -456,9 +473,32 @@ class DeterministicTextToSQLEngine:
                 }
             )
 
+        metrics_info: list[dict[str, Any]] = [
+            {
+                "name": m.name,
+                "expression": m.expression,
+                "description": m.description,
+                "synonyms": m.synonyms,
+            }
+            for m in self._schema.metrics
+        ]
+
+        hierarchies_info: list[dict[str, Any]] = [
+            {
+                "parent_table": h.parent_table,
+                "parent_column": h.parent_column,
+                "child_table": h.child_table,
+                "child_column": h.child_column,
+                "child_to_parent": h.child_to_parent,
+            }
+            for h in self._schema.hierarchies
+        ]
+
         return {
             "title": self._schema.title,
             "description": self._schema.description,
             "table_names": [t.name for t in self._schema.tables],
             "tables": tables_info,
+            "metrics": metrics_info,
+            "hierarchies": hierarchies_info,
         }
