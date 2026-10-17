@@ -1,5 +1,6 @@
 """Compiler package for SQL AST generation and ontology deduplication."""
 
+from deterministic_text_to_sql.compiler.builder import GenericSQLBuilder
 from deterministic_text_to_sql.compiler.deduplicator import (
     DEFAULT_TPCH_HIERARCHY_RULES,
     EQUALITY_OPERATORS,
@@ -7,14 +8,25 @@ from deterministic_text_to_sql.compiler.deduplicator import (
     HierarchyRule,
     OntologyDeduplicator,
 )
-from deterministic_text_to_sql.compiler.models import FilterSlot, QueryIntent
+from deterministic_text_to_sql.compiler.exceptions import CompilerError, SQLBuildError
+from deterministic_text_to_sql.compiler.models import (
+    FilterSlot,
+    MetricSlot,
+    OrderBySlot,
+    QueryIntent,
+)
 
 __all__ = [
     "DEFAULT_TPCH_HIERARCHY_RULES",
     "EQUALITY_OPERATORS",
     "TPCH_NATION_TO_REGION",
+    "CompilerError",
     "FilterSlot",
+    "GenericSQLBuilder",
     "HierarchyRule",
+    "MetricSlot",
     "OntologyDeduplicator",
+    "OrderBySlot",
     "QueryIntent",
+    "SQLBuildError",
 ]
