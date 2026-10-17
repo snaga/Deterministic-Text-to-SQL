@@ -8,7 +8,7 @@ from typing import Any
 from deterministic_text_to_sql.compiler.models import FilterSlot
 from deterministic_text_to_sql.jev.exceptions import JevResponseParseError
 from deterministic_text_to_sql.jev.models import ParsedSlots
-from deterministic_text_to_sql.schema.models import SchemaMetadata
+from deterministic_text_to_sql.schema.models import ColumnMetadata, SchemaMetadata
 
 # Standard TPC-H Nation & Region master constants for deterministic mapping
 TPCH_NATIONS = {
@@ -141,6 +141,113 @@ def _extract_slots_dict(response_data: dict[str, Any]) -> dict[str, Any]:
     return slots
 
 
+def _is_numeric_column(col: ColumnMetadata) -> bool:
+    """Determine whether a column represents a numeric quantity or metric."""
+    if col.role in ("id", "fk"):
+        return False
+    if col.role == "metric":
+        return True
+    type_upper = col.type.upper()
+    numeric_types = (
+        "INT",
+        "BIGINT",
+        "SMALLINT",
+        "TINYINT",
+        "INTEGER",
+        "DECIMAL",
+        "NUMERIC",
+        "FLOAT",
+        "DOUBLE",
+        "REAL",
+        "NUMBER",
+    )
+    if any(nt in type_upper for nt in numeric_types):
+        return True
+    name_lower = col.name.lower()
+    numeric_hints = (
+        "nr_",
+        "_nr",
+        "num_",
+        "_num",
+        "count",
+        "qty",
+        "price",
+        "cost",
+        "amount",
+        "bal",
+        "seats",
+        "capacity",
+        "length",
+        "delay",
+        "distance",
+        "duration",
+    )
+    return any(hint in name_lower for hint in numeric_hints)
+
+
+def _resolve_column_and_table(
+    col_name_or_synonym: str,
+    primary_table: str,
+    schema: SchemaMetadata | None,
+) -> tuple[str, str]:
+    """Resolve physical table name and physical column name from column name or synonym.
+
+    Args:
+        col_name_or_synonym: Raw column name or semantic synonym.
+        primary_table: Preferred default / primary table name.
+        schema: Optional SchemaMetadata for lookup.
+
+    Returns:
+        Tuple of (physical_table_name, physical_column_name).
+    """
+    raw_col = col_name_or_synonym.strip()
+    clean_col = raw_col.split(".")[-1]
+
+    if schema is not None:
+        # 1. Primary table priority
+        pt = schema.get_table(primary_table)
+        if pt is not None:
+            col_meta = pt.get_column(clean_col)
+            if col_meta is not None:
+                return pt.name, col_meta.name
+
+        # 2. Search other schema tables sequentially
+        for tbl in schema.tables:
+            if pt is not None and tbl.name == pt.name:
+                continue
+            col_meta = tbl.get_column(clean_col)
+            if col_meta is not None:
+                return tbl.name, col_meta.name
+
+        # 3. Check if clean_col matches a metric synonym/name
+        metric_def = schema.get_metric(clean_col)
+        if metric_def is not None:
+            return primary_table, metric_def.name
+
+        # 4. Fallback to primary table and given column name
+        return primary_table, clean_col
+
+    # schema is None: legacy TPC-H prefix heuristics
+    target_tbl = primary_table
+    if clean_col.startswith("c_"):
+        target_tbl = "customer"
+    elif clean_col.startswith("ps_"):
+        target_tbl = "partsupp"
+    elif clean_col.startswith("l_"):
+        target_tbl = "lineitem"
+    elif clean_col.startswith("o_"):
+        target_tbl = "orders"
+    elif clean_col.startswith("p_"):
+        target_tbl = "part"
+    elif clean_col.startswith("s_"):
+        target_tbl = "supplier"
+    elif clean_col.startswith("n_"):
+        target_tbl = "nation"
+    elif clean_col.startswith("r_"):
+        target_tbl = "region"
+    return target_tbl, clean_col
+
+
 def parse_jev_response(
     query: str,
     response_data: dict[str, Any],
@@ -169,7 +276,7 @@ def parse_jev_response(
     slots_map = _extract_slots_dict(response_data)
 
     # 1. Primary Table Validation
-    raw_primary = str(slots_map.get("primary_table", "")).strip().lower()
+    raw_primary = str(slots_map.get("primary_table", "")).strip()
     primary_table = raw_primary if raw_primary else "customer"
     if schema is not None:
         table_meta = schema.get_table(primary_table)
@@ -178,35 +285,34 @@ def parse_jev_response(
             primary_table = schema.tables[0].name if schema.tables else "customer"
         else:
             primary_table = table_meta.name
+    else:
+        primary_table = primary_table.lower()
 
     # 2. Secondary Table Validation
-    raw_secondary = str(slots_map.get("secondary_table", "none")).strip().lower()
+    raw_secondary = str(slots_map.get("secondary_table", "none")).strip()
     secondary_table = "none"
-    if raw_secondary and raw_secondary != "none":
+    if raw_secondary and raw_secondary.lower() != "none":
         if schema is not None:
             sec_meta = schema.get_table(raw_secondary)
             if sec_meta is not None:
                 secondary_table = sec_meta.name
         else:
-            secondary_table = raw_secondary
+            secondary_table = raw_secondary.lower()
 
     # 3. Dimension Validation
     raw_dim = str(slots_map.get("dimension", "none")).strip()
     dimension = "none"
-    if raw_dim and raw_dim != "none":
-        # Strip table prefix if provided (e.g. "customer.c_name" -> "c_name")
-        dim_col_name = raw_dim.split(".")[-1]
+    if raw_dim and raw_dim.lower() != "none":
+        clean_dim = raw_dim.split(".")[-1]
         if schema is not None:
-            col_found = False
-            for tbl in schema.tables:
-                if tbl.get_column(dim_col_name) is not None:
-                    dimension = dim_col_name
-                    col_found = True
-                    break
-            if not col_found:
+            dim_tbl, dim_col = _resolve_column_and_table(clean_dim, primary_table, schema)
+            resolved_tbl = schema.get_table(dim_tbl)
+            if resolved_tbl and resolved_tbl.get_column(dim_col) is not None:
+                dimension = dim_col
+            else:
                 dimension = "none"
         else:
-            dimension = dim_col_name
+            dimension = clean_dim
 
     # 4. Metric Validation
     valid_metrics = {
@@ -220,7 +326,16 @@ def parse_jev_response(
         "raw_list",
     }
     raw_metric = str(slots_map.get("metric", "count_records")).strip().lower()
-    metric = raw_metric if raw_metric in valid_metrics else "count_records"
+    if schema is not None and schema.metrics:
+        metric_def = schema.get_metric(raw_metric)
+        if metric_def is not None:
+            metric = metric_def.name
+        elif raw_metric in valid_metrics:
+            metric = raw_metric
+        else:
+            metric = "count_records"
+    else:
+        metric = raw_metric if raw_metric in valid_metrics else "count_records"
 
     # 5. Ranking Validation
     valid_rankings = {"top_5", "top_10", "none"}
@@ -311,48 +426,15 @@ def parse_jev_response(
             nums.remove(10.0)
         val = nums[0] if nums else 0.0
 
-        target_tbl: str = primary_table
-        if schema is not None:
-            found_col_table = False
-            for t in schema.tables:
-                if t.get_column(num_col) is not None:
-                    target_tbl = t.name
-                    found_col_table = True
-                    break
-            if not found_col_table:
-                if num_col.startswith("c_"):
-                    target_tbl = "customer"
-                elif num_col.startswith("ps_"):
-                    target_tbl = "partsupp"
-                elif num_col.startswith("l_"):
-                    target_tbl = "lineitem"
-                elif num_col.startswith("o_"):
-                    target_tbl = "orders"
-                elif num_col.startswith("p_"):
-                    target_tbl = "part"
-                elif num_col.startswith("s_"):
-                    target_tbl = "supplier"
-        else:
-            if num_col.startswith("c_"):
-                target_tbl = "customer"
-            elif num_col.startswith("ps_"):
-                target_tbl = "partsupp"
-            elif num_col.startswith("l_"):
-                target_tbl = "lineitem"
-            elif num_col.startswith("o_"):
-                target_tbl = "orders"
-            elif num_col.startswith("p_"):
-                target_tbl = "part"
-            elif num_col.startswith("s_"):
-                target_tbl = "supplier"
+        target_tbl, actual_col = _resolve_column_and_table(num_col, primary_table, schema)
 
         filter_slots.append(
             FilterSlot(
                 table=target_tbl,
-                column=num_col,
+                column=actual_col,
                 operator=op_map[num_op],
                 value=val,
-                display_label=f"{target_tbl}.{num_col} {op_map[num_op]} {val}",
+                display_label=f"{target_tbl}.{actual_col} {op_map[num_op]} {val}",
             )
         )
 
@@ -368,28 +450,131 @@ def parse_jev_response(
     )
 
     if target != "none" and (has_ex_val > 0.35 or ex_conf > 0.6 or has_ex is None):
-        if target == "returns":
-            filter_slots.append(
-                FilterSlot(
-                    table="lineitem",
-                    column="l_returnflag",
-                    operator="!=",
-                    value="R",
-                    display_label="lineitem.l_returnflag != 'R'",
-                )
-            )
-        elif target == "cancelled":
-            filter_slots.append(
-                FilterSlot(
-                    table="orders",
-                    column="o_orderstatus",
-                    operator="!=",
-                    value="P",
-                    display_label="orders.o_orderstatus != 'P'",
-                )
-            )
+        if schema is not None:
+            bound_ex = False
+            if target == "returns":
+                # Look for lineitem or table with return column or values containing return
+                for t in schema.tables:
+                    for col in t.columns:
+                        col_l = col.name.lower()
+                        col_clean = col_l.replace("_", "")
+                        has_return_val = bool(
+                            col.values
+                            and any("RETURN" in v.upper() or v.upper() == "R" for v in col.values)
+                        )
+                        if (
+                            "return" in col_l
+                            or "returnflag" in col_clean
+                            or any("返品" in s for s in col.synonyms)
+                            or has_return_val
+                        ):
+                            val_ex: Any = "R"
+                            if col.values:
+                                return_cand = next(
+                                    (
+                                        v
+                                        for v in col.values
+                                        if "RETURN" in v.upper() or v.upper() == "R"
+                                    ),
+                                    col.values[0],
+                                )
+                                val_ex = return_cand
+                            filter_slots.append(
+                                FilterSlot(
+                                    table=t.name,
+                                    column=col.name,
+                                    operator="!=",
+                                    value=val_ex,
+                                    display_label=f"{t.name}.{col.name} != '{val_ex}'",
+                                )
+                            )
+                            bound_ex = True
+                            break
+                    if bound_ex:
+                        break
+            elif target == "cancelled":
+                # Look for orders or table with cancel/status column or values containing cancel
+                for t in schema.tables:
+                    for col in t.columns:
+                        col_l = col.name.lower()
+                        col_clean = col_l.replace("_", "")
+                        has_cancel_val = bool(
+                            col.values and any("CANCEL" in v.upper() for v in col.values)
+                        )
+                        if (
+                            "cancel" in col_l
+                            or "status" in col_l
+                            or "orderstatus" in col_clean
+                            or any("キャンセル" in s for s in col.synonyms)
+                            or has_cancel_val
+                        ):
+                            val_can: Any = "P"
+                            if col.values:
+                                cancel_cand = next(
+                                    (v for v in col.values if "CANCEL" in v.upper()),
+                                    col.values[0],
+                                )
+                                val_can = cancel_cand
+                            filter_slots.append(
+                                FilterSlot(
+                                    table=t.name,
+                                    column=col.name,
+                                    operator="!=",
+                                    value=val_can,
+                                    display_label=f"{t.name}.{col.name} != '{val_can}'",
+                                )
+                            )
+                            bound_ex = True
+                            break
+                    if bound_ex:
+                        break
 
-    # 7.2.C Master code filter (nation / region)
+            if not bound_ex:
+                # Fallback to TPC-H defaults if no specific column found
+                if target == "returns":
+                    filter_slots.append(
+                        FilterSlot(
+                            table="lineitem",
+                            column="l_returnflag",
+                            operator="!=",
+                            value="R",
+                            display_label="lineitem.l_returnflag != 'R'",
+                        )
+                    )
+                elif target == "cancelled":
+                    filter_slots.append(
+                        FilterSlot(
+                            table="orders",
+                            column="o_orderstatus",
+                            operator="!=",
+                            value="P",
+                            display_label="orders.o_orderstatus != 'P'",
+                        )
+                    )
+        else:
+            # schema is None: legacy TPC-H hardcode
+            if target == "returns":
+                filter_slots.append(
+                    FilterSlot(
+                        table="lineitem",
+                        column="l_returnflag",
+                        operator="!=",
+                        value="R",
+                        display_label="lineitem.l_returnflag != 'R'",
+                    )
+                )
+            elif target == "cancelled":
+                filter_slots.append(
+                    FilterSlot(
+                        table="orders",
+                        column="o_orderstatus",
+                        operator="!=",
+                        value="P",
+                        display_label="orders.o_orderstatus != 'P'",
+                    )
+                )
+
+    # 7.2.C Master code filter (nation / region or generic hierarchy / values)
     has_mf = slots_map.get("has_master_filter")
     nation = str(slots_map.get("master_nation", "none")).strip()
     region = str(slots_map.get("master_region", "none")).strip()
@@ -403,26 +588,116 @@ def parse_jev_response(
         else (0.5 if has_mf is True else 0.0)
     )
 
-    if nation != "none" and (has_mf_val > 0.35 or nat_conf > 0.6 or has_mf is None):
-        filter_slots.append(
-            FilterSlot(
-                table="nation",
-                column="n_name",
-                operator="=",
-                value=nation,
-                display_label=f"Nation: {nation}",
-            )
-        )
-    elif region != "none" and (has_mf_val > 0.35 or reg_conf > 0.6 or has_mf is None):
-        filter_slots.append(
-            FilterSlot(
-                table="region",
-                column="r_name",
-                operator="=",
-                value=region,
-                display_label=f"Region: {region}",
-            )
-        )
+    if (nation != "none" or region != "none") and (
+        has_mf_val > 0.35 or nat_conf > 0.6 or reg_conf > 0.6 or has_mf is None
+    ):
+        target_val = nation if nation != "none" else region
+        is_nation = nation != "none"
+        if schema is not None:
+            bound_master = False
+            # 1. Search in hierarchies
+            for h in schema.hierarchies:
+                if is_nation:
+                    # Match child
+                    for child_key in h.child_to_parent:
+                        if child_key.upper() == target_val.upper():
+                            filter_slots.append(
+                                FilterSlot(
+                                    table=h.child_table,
+                                    column=h.child_column,
+                                    operator="=",
+                                    value=child_key,
+                                    display_label=f"{h.child_table}.{h.child_column}: {child_key}",
+                                )
+                            )
+                            bound_master = True
+                            break
+                else:
+                    # Match parent
+                    for parent_val in h.child_to_parent.values():
+                        if parent_val.upper() == target_val.upper():
+                            lbl = f"{h.parent_table}.{h.parent_column}: {parent_val}"
+                            filter_slots.append(
+                                FilterSlot(
+                                    table=h.parent_table,
+                                    column=h.parent_column,
+                                    operator="=",
+                                    value=parent_val,
+                                    display_label=lbl,
+                                )
+                            )
+                            bound_master = True
+                            break
+                if bound_master:
+                    break
+
+            # 2. Search in column values
+            if not bound_master:
+                for tbl in schema.tables:
+                    for col in tbl.columns:
+                        if col.values:
+                            for v in col.values:
+                                if v.upper() == target_val.upper():
+                                    filter_slots.append(
+                                        FilterSlot(
+                                            table=tbl.name,
+                                            column=col.name,
+                                            operator="=",
+                                            value=v,
+                                            display_label=f"{tbl.name}.{col.name}: {v}",
+                                        )
+                                    )
+                                    bound_master = True
+                                    break
+                        if bound_master:
+                            break
+                    if bound_master:
+                        break
+
+            # 3. Fallback for schema if nation/region table exists (backward compatibility)
+            if not bound_master:
+                if is_nation and schema.get_table("nation") is not None:
+                    filter_slots.append(
+                        FilterSlot(
+                            table="nation",
+                            column="n_name",
+                            operator="=",
+                            value=target_val,
+                            display_label=f"Nation: {target_val}",
+                        )
+                    )
+                elif not is_nation and schema.get_table("region") is not None:
+                    filter_slots.append(
+                        FilterSlot(
+                            table="region",
+                            column="r_name",
+                            operator="=",
+                            value=target_val,
+                            display_label=f"Region: {target_val}",
+                        )
+                    )
+        else:
+            # schema is None: legacy TPC-H hardcode
+            if is_nation:
+                filter_slots.append(
+                    FilterSlot(
+                        table="nation",
+                        column="n_name",
+                        operator="=",
+                        value=nation,
+                        display_label=f"Nation: {nation}",
+                    )
+                )
+            else:
+                filter_slots.append(
+                    FilterSlot(
+                        table="region",
+                        column="r_name",
+                        operator="=",
+                        value=region,
+                        display_label=f"Region: {region}",
+                    )
+                )
 
     # 7.3 Categorical filter candidates from Jev response or query (whitelist fallback)
     filter_candidates: list[str] = []
@@ -432,78 +707,162 @@ def parse_jev_response(
     elif isinstance(raw_filters, str) and raw_filters:
         filter_candidates.append(raw_filters)
 
-    # Include categorical tokens from query
-    for kw in list(TPCH_REGIONS.keys()) + list(TPCH_NATIONS.keys()):
-        if kw in query:
-            filter_candidates.append(kw)
+    # Dynamically extract filter candidates from query based on schema
+    if schema is not None:
+        # A. From schema.hierarchies child_to_parent keys & values
+        for h in schema.hierarchies:
+            for child_key, parent_val in h.child_to_parent.items():
+                if child_key.lower() in query.lower():
+                    filter_candidates.append(child_key)
+                if parent_val.lower() in query.lower():
+                    filter_candidates.append(parent_val)
+
+        # B. From schema tables columns values
+        for tbl in schema.tables:
+            for col in tbl.columns:
+                if col.values:
+                    for val_item in col.values:
+                        if val_item.lower() in query.lower():
+                            filter_candidates.append(val_item)
+
+        # C. Backward compatibility for TPC-H schema (nation/region tables)
+        if schema.get_table("nation") is not None or schema.get_table("region") is not None:
+            for kw in list(TPCH_REGIONS.keys()) + list(TPCH_NATIONS.keys()):
+                if kw in query:
+                    filter_candidates.append(kw)
+    else:
+        # schema is None: legacy TPC-H keywords
+        for kw in list(TPCH_REGIONS.keys()) + list(TPCH_NATIONS.keys()):
+            if kw in query:
+                filter_candidates.append(kw)
 
     # Deduplicate candidate strings
     seen_filters: set[str] = set()
     for cand in filter_candidates:
         cand_clean = cand.strip()
-        if not cand_clean or cand_clean in seen_filters:
+        if not cand_clean or cand_clean.lower() in seen_filters:
             continue
-        seen_filters.add(cand_clean)
+        seen_filters.add(cand_clean.lower())
 
-        # Region match
-        if cand_clean.upper() in TPCH_REGIONS or cand_clean in TPCH_REGIONS:
-            region_val = TPCH_REGIONS.get(cand_clean.upper(), TPCH_REGIONS.get(cand_clean))
-            if region_val:
-                # Whitelist verify against schema if present
-                if schema is not None:
-                    reg_tbl = schema.get_table("region")
-                    r_col = reg_tbl.get_column("r_name") if reg_tbl else None
-                    if r_col and r_col.values and region_val not in r_col.values:
-                        continue
-                filter_slots.append(
-                    FilterSlot(
-                        table="region",
-                        column="r_name",
-                        operator="=",
-                        value=region_val,
-                        display_label=f"Region: {region_val}",
-                    )
-                )
-                continue
-
-        # Nation match
-        if cand_clean.upper() in TPCH_NATIONS or cand_clean in TPCH_NATIONS:
-            nation_val = TPCH_NATIONS.get(cand_clean.upper(), TPCH_NATIONS.get(cand_clean))
-            if nation_val:
-                filter_slots.append(
-                    FilterSlot(
-                        table="nation",
-                        column="n_name",
-                        operator="=",
-                        value=nation_val,
-                        display_label=f"Nation: {nation_val}",
-                    )
-                )
-                continue
-
-        # Schema Column Values Whitelist Binding (F-JEV-02)
         if schema is not None:
             bound = False
-            for tbl in schema.tables:
-                for col in tbl.columns:
-                    if col.values:
-                        for allowed_val in col.values:
-                            if cand_clean.upper() == allowed_val.upper():
-                                filter_slots.append(
-                                    FilterSlot(
-                                        table=tbl.name,
-                                        column=col.name,
-                                        operator="=",
-                                        value=allowed_val,
-                                        display_label=f"{tbl.name}.{col.name}: {allowed_val}",
-                                    )
-                                )
-                                bound = True
-                                break
-                    if bound:
+            # 1. Match against schema.hierarchies
+            for h in schema.hierarchies:
+                for child_key, parent_val in h.child_to_parent.items():
+                    if cand_clean.upper() == child_key.upper():
+                        filter_slots.append(
+                            FilterSlot(
+                                table=h.child_table,
+                                column=h.child_column,
+                                operator="=",
+                                value=child_key,
+                                display_label=f"{h.child_table}.{h.child_column}: {child_key}",
+                            )
+                        )
+                        bound = True
+                        break
+                    elif cand_clean.upper() == parent_val.upper():
+                        filter_slots.append(
+                            FilterSlot(
+                                table=h.parent_table,
+                                column=h.parent_column,
+                                operator="=",
+                                value=parent_val,
+                                display_label=f"{h.parent_table}.{h.parent_column}: {parent_val}",
+                            )
+                        )
+                        bound = True
                         break
                 if bound:
                     break
+
+            # 2. Match against schema column values (F-JEV-02)
+            if not bound:
+                for tbl in schema.tables:
+                    for col in tbl.columns:
+                        if col.values:
+                            for allowed_val in col.values:
+                                if cand_clean.upper() == allowed_val.upper():
+                                    filter_slots.append(
+                                        FilterSlot(
+                                            table=tbl.name,
+                                            column=col.name,
+                                            operator="=",
+                                            value=allowed_val,
+                                            display_label=f"{tbl.name}.{col.name}: {allowed_val}",
+                                        )
+                                    )
+                                    bound = True
+                                    break
+                        if bound:
+                            break
+                    if bound:
+                        break
+
+            # 3. Backward compatibility with TPC-H if schema has nation/region tables
+            if not bound:
+                if cand_clean.upper() in TPCH_REGIONS or cand_clean in TPCH_REGIONS:
+                    region_val = TPCH_REGIONS.get(cand_clean.upper(), TPCH_REGIONS.get(cand_clean))
+                    if region_val and schema.get_table("region") is not None:
+                        reg_tbl = schema.get_table("region")
+                        r_col = reg_tbl.get_column("r_name") if reg_tbl else None
+                        if not (r_col and r_col.values and region_val not in r_col.values):
+                            filter_slots.append(
+                                FilterSlot(
+                                    table="region",
+                                    column="r_name",
+                                    operator="=",
+                                    value=region_val,
+                                    display_label=f"Region: {region_val}",
+                                )
+                            )
+                            bound = True
+
+                if not bound and (cand_clean.upper() in TPCH_NATIONS or cand_clean in TPCH_NATIONS):
+                    nation_val = TPCH_NATIONS.get(cand_clean.upper(), TPCH_NATIONS.get(cand_clean))
+                    if nation_val and schema.get_table("nation") is not None:
+                        filter_slots.append(
+                            FilterSlot(
+                                table="nation",
+                                column="n_name",
+                                operator="=",
+                                value=nation_val,
+                                display_label=f"Nation: {nation_val}",
+                            )
+                        )
+                        bound = True
+
+        else:
+            # schema is None: legacy TPC-H logic
+            # Region match
+            if cand_clean.upper() in TPCH_REGIONS or cand_clean in TPCH_REGIONS:
+                region_val = TPCH_REGIONS.get(cand_clean.upper(), TPCH_REGIONS.get(cand_clean))
+                if region_val:
+                    filter_slots.append(
+                        FilterSlot(
+                            table="region",
+                            column="r_name",
+                            operator="=",
+                            value=region_val,
+                            display_label=f"Region: {region_val}",
+                        )
+                    )
+                    continue
+
+            # Nation match
+            if cand_clean.upper() in TPCH_NATIONS or cand_clean in TPCH_NATIONS:
+                nation_val = TPCH_NATIONS.get(cand_clean.upper(), TPCH_NATIONS.get(cand_clean))
+                if nation_val:
+                    filter_slots.append(
+                        FilterSlot(
+                            table="nation",
+                            column="n_name",
+                            operator="=",
+                            value=nation_val,
+                            display_label=f"Nation: {nation_val}",
+                        )
+                    )
+                    continue
 
     # 7.4 Numeric Literal Filter Extraction (fallback if no numeric filter already provided)
     has_numeric_filter = any(
@@ -534,21 +893,34 @@ def parse_jev_response(
 
             # Target column determination based on table / metric
             num_table = primary_table
-            num_column = "o_totalprice" if primary_table == "orders" else "s_acctbal"
-            if primary_table == "customer":
-                num_column = "c_acctbal"
-            elif primary_table == "lineitem":
-                num_column = "l_extendedprice"
-
-            # Verify column exists if schema is provided
             if schema is not None:
-                tbl_meta = schema.get_table(num_table)
-                if tbl_meta and tbl_meta.get_column(num_column) is None:
-                    # Find any metric column
-                    for c in tbl_meta.columns:
-                        if c.role == "metric":
-                            num_column = c.name
-                            break
+                tbl_meta = schema.get_table(primary_table)
+                num_column = ""
+                if tbl_meta:
+                    # 1. First priority: column with role == 'metric'
+                    metric_col = next(
+                        (c for c in tbl_meta.columns if c.role == "metric"), None
+                    )
+                    if metric_col is not None:
+                        num_column = metric_col.name
+                    else:
+                        # 2. Second priority: column with numeric type / hint
+                        num_cand = next(
+                            (c for c in tbl_meta.columns if _is_numeric_column(c)), None
+                        )
+                        if num_cand is not None:
+                            num_column = num_cand.name
+                        elif tbl_meta.columns:
+                            num_column = tbl_meta.columns[0].name
+                if not num_column:
+                    num_column = "amount"
+            else:
+                # schema is None: legacy TPC-H hardcoded fallback
+                num_column = "o_totalprice" if primary_table == "orders" else "s_acctbal"
+                if primary_table == "customer":
+                    num_column = "c_acctbal"
+                elif primary_table == "lineitem":
+                    num_column = "l_extendedprice"
 
             filter_slots.append(
                 FilterSlot(
