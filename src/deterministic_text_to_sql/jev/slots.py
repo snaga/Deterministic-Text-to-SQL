@@ -120,6 +120,8 @@ def _extract_slots_dict(response_data: dict[str, Any]) -> dict[str, Any]:
             else:
                 slots[k] = v
         slots["_answers"] = answers
+        if "filter_slots" in response_data and isinstance(response_data["filter_slots"], list):
+            slots["filter_slots"] = response_data["filter_slots"]
     elif "results" in response_data:
         results = response_data["results"]
         if isinstance(results, dict):
@@ -326,11 +328,18 @@ def parse_jev_response(
         "raw_list",
     }
     raw_metric = str(slots_map.get("metric", "count_records")).strip().lower()
-    if schema is not None and schema.metrics:
-        metric_def = schema.get_metric(raw_metric)
+    if schema is not None:
+        metric_def = schema.get_metric(raw_metric) if schema.metrics else None
         if metric_def is not None:
             metric = metric_def.name
-        elif raw_metric in valid_metrics:
+        elif (
+            raw_metric in valid_metrics
+            or any(raw_metric.startswith(p) for p in ("sum_", "avg_", "count_", "min_", "max_"))
+            or (
+                schema.get_table(primary_table)
+                and schema.get_table(primary_table).get_column(raw_metric)  # type: ignore[union-attr]
+            )
+        ):
             metric = raw_metric
         else:
             metric = "count_records"

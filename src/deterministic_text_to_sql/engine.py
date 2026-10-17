@@ -152,10 +152,20 @@ def _build_intent_from_slots(slots: ParsedSlots, schema: SchemaMetadata) -> Quer
             if metric_str.startswith(prefix):
                 candidate_col = metric_str[len(prefix) :]
                 metrics.append(
-                    MetricSlot(column=candidate_col, agg=agg_op, alias=metric_str)
+                    MetricSlot(column=candidate_col, agg=agg_op, alias=candidate_col)
                 )
                 handled = True
                 break
+
+        if not handled:
+            # Check if metric_str is a physical column in primary table or schema
+            pt = schema.get_table(primary_table)
+            col_meta = pt.get_column(metric_str) if pt else None
+            if col_meta:
+                metrics.append(
+                    MetricSlot(column=col_meta.name, agg="MAX", alias=col_meta.name)
+                )
+                handled = True
 
         if not handled:
             metrics.append(MetricSlot(column="*", agg="COUNT", alias="count"))
