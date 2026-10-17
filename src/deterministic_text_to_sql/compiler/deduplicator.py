@@ -1,10 +1,20 @@
 """Ontology deduplicator for eliminating redundant hierarchical filter conditions."""
 
+from __future__ import annotations
+
 from collections.abc import Sequence
-from dataclasses import dataclass, field
 from typing import Any
 
 from deterministic_text_to_sql.compiler.models import FilterSlot
+from deterministic_text_to_sql.schema.models import HierarchyRule, SchemaMetadata
+
+__all__ = [
+    "DEFAULT_TPCH_HIERARCHY_RULES",
+    "EQUALITY_OPERATORS",
+    "TPCH_NATION_TO_REGION",
+    "HierarchyRule",
+    "OntologyDeduplicator",
+]
 
 # Standard TPC-H 25 nations to 5 regions mapping
 TPCH_NATION_TO_REGION: dict[str, str] = {
@@ -53,25 +63,6 @@ def _is_equality_operator(op: str) -> bool:
         True if the operator represents positive equality membership, False otherwise.
     """
     return op.strip().upper() in EQUALITY_OPERATORS
-
-
-@dataclass(frozen=True)
-class HierarchyRule:
-    """Defines a hierarchical relationship between parent and child concepts.
-
-    Attributes:
-        parent_table: Table name of parent concept (e.g. 'region').
-        parent_column: Column name of parent concept (e.g. 'r_name').
-        child_table: Table name of child concept (e.g. 'nation').
-        child_column: Column name of child concept (e.g. 'n_name').
-        child_to_parent: Value mapping from child entity to parent entity (e.g. JAPAN -> ASIA).
-    """
-
-    parent_table: str
-    parent_column: str
-    child_table: str
-    child_column: str
-    child_to_parent: dict[str, str] = field(default_factory=dict)
 
 
 DEFAULT_TPCH_HIERARCHY_RULES: list[HierarchyRule] = [
@@ -143,6 +134,38 @@ class OntologyDeduplicator:
                 )
             )
 
+    @classmethod
+    def from_schema(cls, schema: SchemaMetadata) -> OntologyDeduplicator:
+        """Create an OntologyDeduplicator configured from schema metadata.
+
+        If the schema defines explicit hierarchy rules (schema.hierarchies),
+        those rules are used. If schema.hierarchies is empty, it falls back
+        to DEFAULT_TPCH_HIERARCHY_RULES when the schema contains TPC-H
+        'nation' and 'region' tables; otherwise it initializes with an empty rule list.
+
+        Args:
+            schema: SchemaMetadata containing table and ontology definitions.
+
+        Returns:
+            Configured OntologyDeduplicator instance.
+        """
+        if schema.hierarchies:
+            return cls(rules=schema.hierarchies)
+
+        has_tpch_geo = (
+            schema.get_table("nation") is not None
+            and schema.get_table("region") is not None
+        )
+        if has_tpch_geo:
+            return cls(rules=DEFAULT_TPCH_HIERARCHY_RULES)
+
+        return cls(rules=[])
+
+    @property
+    def rules(self) -> list[HierarchyRule]:
+        """Return the list of normalized hierarchy rules configured in this deduplicator."""
+        return list(self._rules)
+
     def deduplicate(self, filters: Sequence[FilterSlot]) -> list[FilterSlot]:
         """Eliminate redundant parent filters if subsumed by present child filters.
 
@@ -166,6 +189,9 @@ class OntologyDeduplicator:
         """
         if not filters:
             return []
+
+        if not self._rules:
+            return list(filters)
 
         redundant_indices: set[int] = set()
 

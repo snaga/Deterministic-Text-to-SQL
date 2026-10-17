@@ -9,7 +9,6 @@ from typing import Any
 
 from deterministic_text_to_sql.compiler.builder import GenericSQLBuilder
 from deterministic_text_to_sql.compiler.deduplicator import (
-    DEFAULT_TPCH_HIERARCHY_RULES,
     OntologyDeduplicator,
 )
 from deterministic_text_to_sql.compiler.models import (
@@ -249,7 +248,7 @@ class DeterministicTextToSQLEngine:
 
         # 3. Configure Core Subsystems
         self._schema_graph = SchemaGraph(self._schema)
-        self._deduplicator = OntologyDeduplicator(DEFAULT_TPCH_HIERARCHY_RULES)
+        self._deduplicator = OntologyDeduplicator.from_schema(self._schema)
         self._sql_builder = GenericSQLBuilder(
             schema_graph=self._schema_graph,
             deduplicator=self._deduplicator,
