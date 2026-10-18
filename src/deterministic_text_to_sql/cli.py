@@ -574,6 +574,33 @@ def schema_command(
             )
         console.print(metrics_table)
 
+    # Semantic Dimensions
+    dimensions = info.get("dimensions", [])
+    if dimensions:
+        dim_table = Table(
+            title="[bold magenta]Semantic Dimensions[/]",
+            box=box.SIMPLE_HEAVY,
+            show_header=True,
+            header_style="bold magenta",
+        )
+        dim_table.add_column("Dimension Name", style="bold white")
+        dim_table.add_column("Expression", style="cyan", overflow="fold")
+        dim_table.add_column("Time Granularity", style="yellow")
+        dim_table.add_column("Synonyms", style="dim", overflow="fold")
+        dim_table.add_column("Description", style="white", overflow="fold")
+
+        for d in dimensions:
+            syns = ", ".join(d.get("synonyms", []))
+            time_gran = d.get("time_granularity") or ""
+            dim_table.add_row(
+                d["name"],
+                d.get("expression") or "",
+                time_gran,
+                syns,
+                d.get("description", ""),
+            )
+        console.print(dim_table)
+
     # Ontology Hierarchies
     hierarchies = info.get("hierarchies", [])
     if hierarchies:

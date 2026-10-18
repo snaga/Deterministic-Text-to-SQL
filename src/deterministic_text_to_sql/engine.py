@@ -48,26 +48,47 @@ def _build_intent_from_slots(slots: ParsedSlots, schema: SchemaMetadata) -> Quer
     primary_table = primary_tbl_meta.name if primary_tbl_meta else slots.primary_table
 
     # 2. Dimensions Resolution
-    dimensions: list[str] = []
-    if slots.dimension and slots.dimension.lower() != "none":
-        dim_clean = slots.dimension.strip()
+    candidate_dims: list[str] = []
+    if slots.dimensions:
+        candidate_dims = [d for d in slots.dimensions if d and d.strip().lower() != "none"]
+    elif slots.dimension and slots.dimension.strip().lower() != "none":
+        candidate_dims = [slots.dimension]
+
+    resolved_dimensions: list[str] = []
+    for d in candidate_dims:
+        dim_clean = d.strip()
+        if not dim_clean or dim_clean.lower() == "none":
+            continue
+
+        # Check semantic dimensions defined in schema
+        dim_def = schema.get_dimension(dim_clean)
+        if dim_def is not None:
+            if dim_def.name not in resolved_dimensions:
+                resolved_dimensions.append(dim_def.name)
+            continue
+
+        # Fallback to physical column resolution
+        resolved_col: str | None = None
         if "." in dim_clean:
-            dimensions.append(dim_clean)
+            resolved_col = dim_clean
         else:
-            # Check primary table first
-            resolved_col: str | None = None
             if primary_tbl_meta and primary_tbl_meta.get_column(dim_clean):
                 resolved_col = f"{primary_tbl_meta.name}.{dim_clean}"
             elif slots.secondary_table and slots.secondary_table.lower() != "none":
                 sec_meta = schema.get_table(slots.secondary_table)
                 if sec_meta and sec_meta.get_column(dim_clean):
                     resolved_col = f"{sec_meta.name}.{dim_clean}"
-            else:
+            if not resolved_col:
                 for tbl in schema.tables:
                     if tbl.get_column(dim_clean):
                         resolved_col = f"{tbl.name}.{dim_clean}"
                         break
-            dimensions.append(resolved_col or dim_clean)
+            resolved_col = resolved_col or dim_clean
+
+        if resolved_col not in resolved_dimensions:
+            resolved_dimensions.append(resolved_col)
+
+    dimensions = resolved_dimensions
 
     # 3. Metrics Resolution
     metrics: list[tuple[str, str] | tuple[str, str, str] | MetricSlot] = []
@@ -210,6 +231,7 @@ def _build_intent_from_slots(slots: ParsedSlots, schema: SchemaMetadata) -> Quer
         dimensions=dimensions,
         metrics=metrics,
         filters=filters,
+        having=list(slots.having_slots),
         limit=limit,
         order_by=order_by,
     )
@@ -483,6 +505,18 @@ class DeterministicTextToSQLEngine:
                 }
             )
 
+        dimensions_info: list[dict[str, Any]] = [
+            {
+                "name": dim.name,
+                "expression": dim.expression,
+                "description": dim.description,
+                "synonyms": list(dim.synonyms),
+                "is_time": dim.is_time,
+                "time_granularity": dim.time_granularity,
+            }
+            for dim in self._schema.dimensions
+        ]
+
         metrics_info: list[dict[str, Any]] = [
             {
                 "name": m.name,
@@ -509,6 +543,7 @@ class DeterministicTextToSQLEngine:
             "description": self._schema.description,
             "table_names": [t.name for t in self._schema.tables],
             "tables": tables_info,
+            "dimensions": dimensions_info,
             "metrics": metrics_info,
             "hierarchies": hierarchies_info,
         }
