@@ -669,7 +669,14 @@ class TestPackageCLICommand:
 
         cli_executable = shutil.which("deterministic-text-to-sql")
         if cli_executable is not None:
-            cli_cmd = [cli_executable, "query", "日本の顧客", "--json"]
+            cli_cmd = [
+                cli_executable,
+                "query",
+                "日本の顧客",
+                "--schema",
+                str(FIXTURE_PATH),
+                "--json",
+            ]
         else:
             cli_cmd = [
                 sys.executable,
@@ -677,6 +684,8 @@ class TestPackageCLICommand:
                 "deterministic_text_to_sql.cli",
                 "query",
                 "日本の顧客",
+                "--schema",
+                str(FIXTURE_PATH),
                 "--json",
             ]
 
@@ -684,8 +693,10 @@ class TestPackageCLICommand:
             cli_cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
-            timeout=10,
+            timeout=15,
         )
 
         assert (

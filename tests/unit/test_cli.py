@@ -114,17 +114,19 @@ def build_mock_jev_client() -> JevClient:
 
 
 @pytest.fixture
-def mock_engine_factory(monkeypatch: pytest.MonkeyPatch, tpch_schema: SchemaMetadata) -> None:
+def mock_engine_factory(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch create_engine in cli module to inject MockTransport client."""
+    from deterministic_text_to_sql.cli import resolve_schema_path
+
     def _mock_create_engine(
         schema_path: Path | None = None,
         api_key: str | None = None,
         jev_client: JevClient | None = None,
     ) -> DeterministicTextToSQLEngine:
-        target_schema = tpch_schema if schema_path is None else schema_path
+        resolved = resolve_schema_path(schema_path)
         client = jev_client or build_mock_jev_client()
         return DeterministicTextToSQLEngine(
-            schema=target_schema,
+            schema=resolved,
             jev_client=client,
             api_key=api_key,
         )
@@ -143,7 +145,9 @@ class TestOneShotQuery:
     """Tests for one-shot deterministic query compilation."""
 
     def test_oneshot_success_rich(self, runner: CliRunner) -> None:
-        result = runner.invoke(app, ["アジアの顧客の売上トップ5 / Aで"])
+        result = runner.invoke(
+            app, ["アジアの顧客の売上トップ5 / Aで", "--schema", str(FIXTURE_PATH)]
+        )
         assert result.exit_code == 0
         assert "Generated Deterministic SQL" in result.output
         assert "SELECT" in result.output
@@ -151,7 +155,10 @@ class TestOneShotQuery:
         assert "Total Latency:" in result.output
 
     def test_oneshot_success_json(self, runner: CliRunner) -> None:
-        result = runner.invoke(app, ["アジアの顧客の売上トップ5 / Aで", "--json"])
+        result = runner.invoke(
+            app,
+            ["アジアの顧客の売上トップ5 / Aで", "--schema", str(FIXTURE_PATH), "--json"],
+        )
         assert result.exit_code == 0
 
         # Must parse as clean JSON without ANSI color escape sequences
@@ -167,7 +174,7 @@ class TestOneShotQuery:
     def test_oneshot_hitl_rich_exit_code_2(
         self, runner: CliRunner
     ) -> None:
-        result = runner.invoke(app, ["アジアの顧客の売上トップ5"])
+        result = runner.invoke(app, ["アジアの顧客の売上トップ5", "--schema", str(FIXTURE_PATH)])
         assert result.exit_code == 2
         assert "Human-in-the-Loop Disambiguation Required" in result.output
         assert "Question:" in result.output
@@ -179,7 +186,10 @@ class TestOneShotQuery:
     def test_oneshot_hitl_json_exit_code_2(
         self, runner: CliRunner
     ) -> None:
-        result = runner.invoke(app, ["アジアの顧客の売上トップ5", "--json"])
+        result = runner.invoke(
+            app,
+            ["アジアの顧客の売上トップ5", "--schema", str(FIXTURE_PATH), "--json"],
+        )
         assert result.exit_code == 2
 
         data = json.loads(result.output)
@@ -194,7 +204,15 @@ class TestOneShotQuery:
         self, runner: CliRunner
     ) -> None:
         result = runner.invoke(
-            app, ["アジアの顧客の売上トップ5", "--clarify", "B", "--json"]
+            app,
+            [
+                "アジアの顧客の売上トップ5",
+                "--schema",
+                str(FIXTURE_PATH),
+                "--clarify",
+                "B",
+                "--json",
+            ],
         )
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -205,7 +223,10 @@ class TestOneShotQuery:
     def test_oneshot_force_bypasses_hitl(
         self, runner: CliRunner
     ) -> None:
-        result = runner.invoke(app, ["アジアの顧客の売上トップ5", "--force", "--json"])
+        result = runner.invoke(
+            app,
+            ["アジアの顧客の売上トップ5", "--schema", str(FIXTURE_PATH), "--force", "--json"],
+        )
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["status"] == "success"
@@ -215,7 +236,15 @@ class TestOneShotQuery:
         self, runner: CliRunner
     ) -> None:
         result = runner.invoke(
-            app, ["アジアの顧客の売上トップ5 / Aで", "--dialect", "duckdb", "--json"]
+            app,
+            [
+                "アジアの顧客の売上トップ5 / Aで",
+                "--schema",
+                str(FIXTURE_PATH),
+                "--dialect",
+                "duckdb",
+                "--json",
+            ],
         )
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -224,7 +253,7 @@ class TestOneShotQuery:
     def test_oneshot_empty_query_error(
         self, runner: CliRunner
     ) -> None:
-        result = runner.invoke(app, ["   ", "--json"])
+        result = runner.invoke(app, ["   ", "--schema", str(FIXTURE_PATH), "--json"])
         assert result.exit_code == 1
         data = json.loads(result.output)
         assert data["status"] == "error"
@@ -242,13 +271,31 @@ class TestOneShotQuery:
         assert data["status"] == "error"
         assert "not exist" in data["error_message"] or "not found" in data["error_message"]
 
+    def test_oneshot_missing_schema_error_json(
+        self, runner: CliRunner
+    ) -> None:
+        result = runner.invoke(app, ["アジアの顧客の売上トップ5", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+        assert "スキーマファイルが指定されていません" in data["error_message"]
+        assert "--schema <path>" in data["error_message"]
+
+    def test_oneshot_missing_schema_error_rich(
+        self, runner: CliRunner
+    ) -> None:
+        result = runner.invoke(app, ["アジアの顧客の売上トップ5"])
+        assert result.exit_code == 1
+        assert "スキーマファイルが指定されていません" in result.output
+        assert "--schema <path>" in result.output
+
 
 @pytest.mark.usefixtures("mock_engine_factory")
 class TestSchemaCommand:
     """Tests for database schema inspection command."""
 
     def test_schema_rich_table(self, runner: CliRunner) -> None:
-        result = runner.invoke(app, ["schema"])
+        result = runner.invoke(app, ["schema", "--schema", str(FIXTURE_PATH)])
         assert result.exit_code == 0
         assert "Database Schema Inspector" in result.output
         assert "Table: customer" in result.output
@@ -256,7 +303,7 @@ class TestSchemaCommand:
         assert "orders" in result.output
 
     def test_schema_json(self, runner: CliRunner) -> None:
-        result = runner.invoke(app, ["schema", "--json"])
+        result = runner.invoke(app, ["schema", "--schema", str(FIXTURE_PATH), "--json"])
         assert result.exit_code == 0
 
         data = json.loads(result.output)
@@ -274,6 +321,18 @@ class TestSchemaCommand:
         data = json.loads(result.output)
         assert "error" in data
 
+    def test_schema_missing_schema_error_json(self, runner: CliRunner) -> None:
+        result = runner.invoke(app, ["schema", "--json"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["status"] == "error"
+        assert "スキーマファイルが指定されていません" in data["error_message"]
+
+    def test_schema_missing_schema_error_rich(self, runner: CliRunner) -> None:
+        result = runner.invoke(app, ["schema"])
+        assert result.exit_code == 1
+        assert "スキーマファイルが指定されていません" in result.output
+
 
 @pytest.mark.usefixtures("mock_engine_factory")
 class TestInteractiveCommand:
@@ -282,7 +341,9 @@ class TestInteractiveCommand:
     def test_interactive_quit_immediately(
         self, runner: CliRunner
     ) -> None:
-        result = runner.invoke(app, ["interactive"], input="exit\n")
+        result = runner.invoke(
+            app, ["interactive", "--schema", str(FIXTURE_PATH)], input="exit\n"
+        )
         assert result.exit_code == 0
         assert "Interactive REPL" in result.output
         assert "Goodbye!" in result.output
@@ -291,7 +352,9 @@ class TestInteractiveCommand:
         self, runner: CliRunner
     ) -> None:
         user_inputs = "アジアの顧客の売上トップ5 / Aで\nexit\n"
-        result = runner.invoke(app, ["interactive"], input=user_inputs)
+        result = runner.invoke(
+            app, ["interactive", "--schema", str(FIXTURE_PATH)], input=user_inputs
+        )
         assert result.exit_code == 0
         assert "Generated Deterministic SQL" in result.output
         assert "SELECT" in result.output
@@ -304,7 +367,9 @@ class TestInteractiveCommand:
         # 2. Immediate choice 'A' resolves ambiguity
         # 3. Exit REPL
         user_inputs = "アジアの顧客の売上トップ5\nA\nexit\n"
-        result = runner.invoke(app, ["interactive"], input=user_inputs)
+        result = runner.invoke(
+            app, ["interactive", "--schema", str(FIXTURE_PATH)], input=user_inputs
+        )
         assert result.exit_code == 0
         assert "Human-in-the-Loop Disambiguation Required" in result.output
         assert "Generated Deterministic SQL" in result.output
@@ -318,7 +383,9 @@ class TestInteractiveCommand:
         # 3. Enter 'Aで' in the next REPL turn
         # 4. Exit REPL
         user_inputs = "アジアの顧客の売上トップ5\n\nAで\nexit\n"
-        result = runner.invoke(app, ["interactive"], input=user_inputs)
+        result = runner.invoke(
+            app, ["interactive", "--schema", str(FIXTURE_PATH)], input=user_inputs
+        )
         assert result.exit_code == 0
         assert "Human-in-the-Loop Disambiguation Required" in result.output
         assert "Generated Deterministic SQL" in result.output
@@ -326,8 +393,22 @@ class TestInteractiveCommand:
     def test_default_invocation_launches_interactive(
         self, runner: CliRunner
     ) -> None:
-        # Invoking root CLI with no arguments must start interactive REPL
-        result = runner.invoke(app, [], input="q\n")
+        # Invoking root CLI with --schema and no query argument must start interactive REPL
+        result = runner.invoke(app, ["--schema", str(FIXTURE_PATH)], input="q\n")
         assert result.exit_code == 0
         assert "Interactive REPL" in result.output
         assert "Goodbye!" in result.output
+
+    def test_interactive_missing_schema_error(
+        self, runner: CliRunner
+    ) -> None:
+        result = runner.invoke(app, ["interactive"])
+        assert result.exit_code == 1
+        assert "スキーマファイルが指定されていません" in result.output
+
+    def test_default_invocation_missing_schema_error(
+        self, runner: CliRunner
+    ) -> None:
+        result = runner.invoke(app, [])
+        assert result.exit_code == 1
+        assert "スキーマファイルが指定されていません" in result.output

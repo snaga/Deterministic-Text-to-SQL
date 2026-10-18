@@ -175,15 +175,17 @@ python examples/tpch/run_tutorial.py
 ## 💻 CLI の使い方
 
 インストールすると、CLI コマンド `deterministic-text-to-sql` が利用可能になります。
+本エンジンは完全汎用 Text-to-SQL エンジンであるため、**`--schema <path>` による Apache Ossie セマンティックモデル（YAML / JSON）の指定が基本**です（未指定時は親切なエラー案内を表示）。TPC-H ベンチマークで試す場合は `--schema examples/tpch/tpch_semantic_model.yaml` を指定してください。
 
 ### 1. 人間向け対話型 REPL モード (`interactive`)
 
-引数を指定せずに実行するか、`interactive` サブコマンドを実行すると、対話型 REPL セッションが起動します。
+`--schema` を指定して引数なしで実行するか、`interactive` サブコマンドを実行すると、対話型 REPL セッションが起動します。
 
 ```bash
-deterministic-text-to-sql
+# TPC-H サンプルモデルを指定して起動
+deterministic-text-to-sql --schema examples/tpch/tpch_semantic_model.yaml
 # または
-deterministic-text-to-sql interactive
+deterministic-text-to-sql interactive --schema examples/tpch/tpch_semantic_model.yaml
 ```
 
 ```text
@@ -216,23 +218,20 @@ SQL> 売上トップ5
 
 ### 2. ワンショット自然言語クエリ (`query`)
 
-1回限りのクエリ合成をコマンドラインから即座に実行できます。`--schema` オプションで `.yaml` / `.json` のパスを指定できます（省略時は自動探索）。
+1回限りのクエリ合成をコマンドラインから即座に実行できます。`--schema` オプションで対象の `.yaml` / `.json` モデル定義ファイルを指定します。
 
 ```bash
-# 基本的な質問
-deterministic-text-to-sql query "日本の顧客一覧"
-
-# スキーマファイルを明示指定（Apache Ossie YAML）
-deterministic-text-to-sql query "アジア地域の顧客残高集計" --schema examples/tpch/tpch_semantic_model.yaml
+# 基本的な質問（TPC-H スキーマ指定）
+deterministic-text-to-sql query "日本の顧客一覧" --schema examples/tpch/tpch_semantic_model.yaml
 
 # スラッシュ構文による HITL 補足指定
-deterministic-text-to-sql query "アジアの顧客の売上トップ5 / Aで"
+deterministic-text-to-sql query "アジアの顧客の売上トップ5 / Aで" --schema examples/tpch/tpch_semantic_model.yaml
 
 # ダイアレクト指定（PostgreSQL, SQLite, DuckDB, Snowflake, BigQuery）
-deterministic-text-to-sql query "売上上位5件の顧客と注文情報" --dialect sqlite
+deterministic-text-to-sql query "売上上位5件の顧客と注文情報" --schema examples/tpch/tpch_semantic_model.yaml --dialect sqlite
 
 # 曖昧性確認をスキップして強制生成 (--force)
-deterministic-text-to-sql query "売上トップ5" --force
+deterministic-text-to-sql query "売上トップ5" --schema examples/tpch/tpch_semantic_model.yaml --force
 ```
 
 ### 3. AI エージェント向け構造化 JSON 出力 (`--json`)
@@ -240,7 +239,7 @@ deterministic-text-to-sql query "売上トップ5" --force
 AI エージェント（Claude, Gemini, GPT 等）がツールとして呼び出す場合、`--json` フラグを付与することで、ターミナル装飾のない純粋な機械可読 JSON を取得できます。
 
 ```bash
-deterministic-text-to-sql query "日本の顧客一覧" --json
+deterministic-text-to-sql query "日本の顧客一覧" --schema examples/tpch/tpch_semantic_model.yaml --json
 ```
 
 **出力例 (ステータスコード `0` / SUCCESS):**
@@ -304,14 +303,11 @@ deterministic-text-to-sql query "日本の顧客一覧" --json
 対象データベースのテーブル、カラム、役割（role）、外部キー結合関係、**Semantic Metrics**、および **Ontology Hierarchies** を Rich テーブルや JSON で詳細に可視化・検査できます。
 
 ```bash
-# 人間向けリッチテーブル表示（Metrics や Hierarchies も美麗表示）
-deterministic-text-to-sql schema
-
-# カスタム Ossie スキーマの指定
+# 人間向けリッチテーブル表示（TPC-H スキーマ指定）
 deterministic-text-to-sql schema --schema examples/tpch/tpch_semantic_model.yaml
 
 # エージェント向け構造化 JSON
-deterministic-text-to-sql schema --json
+deterministic-text-to-sql schema --schema examples/tpch/tpch_semantic_model.yaml --json
 ```
 
 ---

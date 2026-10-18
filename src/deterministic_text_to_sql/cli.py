@@ -66,13 +66,7 @@ app = typer.Typer(
 
 
 def resolve_schema_path(schema_arg: Path | None = None) -> Path:
-    """Resolve schema file path from argument or default search locations.
-
-    Search priority:
-        1. Explicitly provided path in schema_arg.
-        2. Bundled package fixture: src/deterministic_text_to_sql/fixtures/tpch_schema.json
-        3. Current working directory: ./tpch_schema.json
-        4. Test fixture in repo: ./tests/fixtures/tpch_schema.json
+    """Resolve schema file path from argument.
 
     Args:
         schema_arg: Optional user-supplied schema file path.
@@ -81,34 +75,19 @@ def resolve_schema_path(schema_arg: Path | None = None) -> Path:
         Resolved absolute Path to schema file.
 
     Raises:
-        FileNotFoundError: If schema file cannot be found in any expected location.
+        FileNotFoundError: If schema file is not specified or does not exist.
     """
-    if schema_arg is not None:
-        p = schema_arg.resolve()
-        if not p.is_file():
-            raise FileNotFoundError(f"Specified schema file does not exist: {schema_arg}")
-        return p
+    if schema_arg is None:
+        raise FileNotFoundError(
+            "スキーマファイルが指定されていません。--schema <path> で "
+            "Apache Ossie セマンティックモデル（YAML / JSON）を指定してください。"
+            "（例: --schema examples/tpch/tpch_semantic_model.yaml）"
+        )
 
-    # Search candidates in priority order:
-    # 1. TPC-H Ossie YAML
-    # 2. TPC-H legacy JSON schema
-    search_candidates = [
-        Path.cwd() / "tests" / "fixtures" / "tpch_ossie.yaml",
-        Path.cwd() / "tpch_ossie.yaml",
-        Path(__file__).resolve().parent / "fixtures" / "tpch_ossie.yaml",
-        Path(__file__).resolve().parent / "fixtures" / "tpch_schema.json",
-        Path.cwd() / "tpch_schema.json",
-        Path.cwd() / "tests" / "fixtures" / "tpch_schema.json",
-    ]
-
-    for candidate in search_candidates:
-        if candidate.is_file():
-            return candidate.resolve()
-
-    raise FileNotFoundError(
-        "Schema file not found. Please provide --schema <path> or "
-        "ensure tpch_ossie.yaml or tpch_schema.json exists."
-    )
+    p = schema_arg.resolve()
+    if not p.is_file():
+        raise FileNotFoundError(f"Specified schema file does not exist: {schema_arg}")
+    return p
 
 
 def create_engine(
@@ -119,7 +98,7 @@ def create_engine(
     """Instantiate DeterministicTextToSQLEngine with resolved schema and client.
 
     Args:
-        schema_path: Path to schema JSON file (or None for default).
+        schema_path: Path to schema file (YAML or JSON).
         api_key: Optional TypeSafe API key.
         jev_client: Optional pre-configured JevClient instance.
 
@@ -220,11 +199,28 @@ def _render_result_human(result: EngineResult, console_target: Console = console
         err_msg = result.error_message or "Unknown engine error occurred."
         console_target.print(
             Panel(
-                Text.from_markup(f"[bold red]Error:[/] {err_msg}"),
+                Text(f"Error: {err_msg}", style="bold red"),
                 title="[bold red]Execution Failed[/]",
                 border_style="red",
             )
         )
+
+
+def _render_error_human(title: str, message: str, console_target: Console = err_console) -> None:
+    """Render human-friendly Rich error panel for CLI exceptions.
+
+    Args:
+        title: Title string for the error panel.
+        message: Error message body string.
+        console_target: Target Rich console (defaults to err_console).
+    """
+    console_target.print(
+        Panel(
+            Text(message, style="bold red"),
+            title=f"[bold red]{title}[/]",
+            border_style="red",
+        )
+    )
 
 
 @app.command(name="query")
@@ -240,7 +236,7 @@ def query_command(
         typer.Option(
             "--schema",
             "-s",
-            help="Path to semantic schema metadata JSON file.",
+            help="Path to semantic schema metadata file (YAML or JSON).",
         ),
     ] = None,
     dialect: Annotated[
@@ -306,7 +302,7 @@ def query_command(
             }
             sys.stdout.write(json.dumps(err_dict, indent=2, ensure_ascii=False) + "\n")
         else:
-            err_console.print(f"[bold red]Failed to initialize engine:[/] {e}")
+            _render_error_human("Failed to initialize engine", str(e))
         raise typer.Exit(code=1) from e
 
     try:
@@ -338,7 +334,7 @@ def interactive_command(
         typer.Option(
             "--schema",
             "-s",
-            help="Path to semantic schema metadata JSON file.",
+            help="Path to semantic schema metadata file (YAML or JSON).",
         ),
     ] = None,
     dialect: Annotated[
@@ -365,7 +361,7 @@ def interactive_command(
     try:
         engine = create_engine(schema_path=schema)
     except Exception as e:
-        err_console.print(f"[bold red]Failed to initialize engine:[/] {e}")
+        _render_error_human("Failed to initialize engine", str(e))
         raise typer.Exit(code=1) from e
 
     banner = (
@@ -463,7 +459,7 @@ def schema_command(
         typer.Option(
             "--schema",
             "-s",
-            help="Path to semantic schema metadata JSON file.",
+            help="Path to semantic schema metadata file (YAML or JSON).",
         ),
     ] = None,
     json_output: Annotated[
@@ -480,9 +476,14 @@ def schema_command(
         engine = create_engine(schema_path=schema)
     except Exception as e:
         if json_output:
-            sys.stdout.write(json.dumps({"error": str(e)}, indent=2) + "\n")
+            err_dict = {
+                "status": "error",
+                "error_message": str(e),
+                "error": str(e),
+            }
+            sys.stdout.write(json.dumps(err_dict, indent=2, ensure_ascii=False) + "\n")
         else:
-            err_console.print(f"[bold red]Failed to load schema:[/] {e}")
+            _render_error_human("Failed to load schema", str(e))
         raise typer.Exit(code=1) from e
 
     try:

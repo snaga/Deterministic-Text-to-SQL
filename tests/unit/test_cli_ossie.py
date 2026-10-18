@@ -5,7 +5,7 @@ Tests cover:
 - Pure structured JSON query output with --json
 - Schema inspection command with Rich tables (Metrics, Hierarchies)
 - Schema inspection command with pure JSON output containing metrics and hierarchies
-- Automatic default schema resolution prioritizing tpch_ossie.yaml
+- Error guidance and exit code 1 when --schema is omitted (no implicit fallback)
 """
 
 from __future__ import annotations
@@ -150,10 +150,43 @@ class TestCliOssieSchemaCommand:
         assert data["hierarchies"][0]["parent_table"] == "region"
         assert data["hierarchies"][0]["child_table"] == "nation"
 
-    def test_schema_default_path_resolves_ossie_yaml(self, runner: CliRunner) -> None:
-        """Verify omitting --schema resolves tpch_ossie.yaml and includes metrics."""
-        result = runner.invoke(app, ["schema", "--json"])
-        assert result.exit_code == 0
+    def test_resolve_schema_path_default_finding(self) -> None:
+        """Verify resolve_schema_path raises FileNotFoundError when schema_arg is None."""
+        from deterministic_text_to_sql.cli import resolve_schema_path
+
+        with pytest.raises(FileNotFoundError) as exc_info:
+            resolve_schema_path(None)
+
+        msg = str(exc_info.value)
+        assert "スキーマファイルが指定されていません" in msg
+        assert "--schema <path>" in msg
+        assert "examples/tpch/tpch_semantic_model.yaml" in msg
+
+    def test_schema_unspecified_exits_with_error_and_guidance(
+        self, runner: CliRunner
+    ) -> None:
+        """Verify omitting --schema in schema command exits code 1 with guidance message."""
+        result = runner.invoke(app, ["schema"])
+        assert result.exit_code == 1
+        assert "スキーマファイルが指定されていません" in result.output
+        assert "--schema <path>" in result.output
+
+    def test_query_unspecified_schema_exits_with_error_and_guidance(
+        self, runner: CliRunner
+    ) -> None:
+        """Verify omitting --schema in query command exits code 1 with guidance message."""
+        result = runner.invoke(app, ["query", "アジアの顧客の売上トップ5"])
+        assert result.exit_code == 1
+        assert "スキーマファイルが指定されていません" in result.output
+        assert "--schema <path>" in result.output
+
+    def test_query_unspecified_schema_json_output(
+        self, runner: CliRunner
+    ) -> None:
+        """Verify omitting --schema in query command with --json returns structured error JSON."""
+        result = runner.invoke(app, ["query", "アジアの顧客の売上トップ5", "--json"])
+        assert result.exit_code == 1
         data = json.loads(result.output)
-        assert "metrics" in data
-        assert len(data["metrics"]) == 6
+        assert data["status"] == "error"
+        assert "スキーマファイルが指定されていません" in data["error_message"]
+        assert "--schema <path>" in data["error_message"]
