@@ -741,6 +741,11 @@ datasets:
         datatype: DATE
         description: "注文日"
         role: date_filter
+        is_time: true
+        time_granularities:
+          - year
+          - month
+          - day
         expression:
           dialects:
             - dialect: ANSI_SQL
@@ -750,6 +755,10 @@ datasets:
             - "注文日"
             - "受注日"
             - "order date"
+            - "注文年"
+            - "注文月"
+            - "年"
+            - "月"
       - name: o_orderpriority
         datatype: "CHAR(15)"
         description: "注文優先度（1-URGENT, 2-HIGH, 3-MEDIUM, 4-NOT SPECIFIED, 5-LOW）"

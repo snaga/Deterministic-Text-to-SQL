@@ -1086,8 +1086,10 @@ def parse_jev_response(
             unique_having.append(hs)
 
     # 7.5 Numeric Literal Filter Extraction (fallback if no numeric/having filter provided)
+    has_explicit_filter_slots = bool(slots_map.get("filter_slots"))
     has_numeric_filter = (
-        any(
+        has_explicit_filter_slots
+        or any(
             isinstance(fs.value, (int, float)) and fs.operator in (">=", "<=", ">", "<", "=")
             for fs in filter_slots
         )

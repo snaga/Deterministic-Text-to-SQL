@@ -5,6 +5,7 @@ from typing import Any
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.dialects.sqlite import SQLite
 
 from deterministic_text_to_sql.compiler.deduplicator import OntologyDeduplicator
 from deterministic_text_to_sql.compiler.exceptions import SQLBuildError
@@ -17,6 +18,30 @@ from deterministic_text_to_sql.compiler.models import (
 )
 from deterministic_text_to_sql.graph.exceptions import UnconnectedSchemaError
 from deterministic_text_to_sql.graph.resolver import SchemaGraph
+
+
+def _sqlite_extract_transform(generator: Any, expression: exp.Extract) -> str:
+    """Transform ANSI EXTRACT expression to SQLite STRFTIME function call."""
+    part_node = expression.this
+    part_str = (
+        part_node.name.lower()
+        if hasattr(part_node, "name")
+        else str(part_node).lower()
+    )
+    fmt_map = {
+        "year": "%Y",
+        "month": "%m",
+        "day": "%d",
+        "hour": "%H",
+        "minute": "%M",
+        "second": "%S",
+    }
+    fmt = fmt_map.get(part_str, "%Y")
+    arg = generator.sql(expression, "expression")
+    return f"STRFTIME('{fmt}', {arg})"
+
+
+SQLite.Generator.TRANSFORMS[exp.Extract] = _sqlite_extract_transform
 
 
 class GenericSQLBuilder:
