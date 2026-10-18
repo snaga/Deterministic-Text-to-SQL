@@ -4,7 +4,7 @@
 [![SQL Engine](https://img.shields.io/badge/AST-sqlglot-brightgreen.svg)](https://github.com/tobymao/sqlglot)
 [![Classifier](https://img.shields.io/badge/System1-TypeSafe%20Jev-orange.svg)](https://typesafe.ai)
 [![Semantic Model: Apache Ossie](https://img.shields.io/badge/semantic%20model-Apache%20Ossie-red.svg)](https://github.com/apache/ossie)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Type Checked: Mypy](https://img.shields.io/badge/type%20checked-mypy-blue.svg)](https://mypy-lang.org/)
 
@@ -368,4 +368,7 @@ mypy src tests
 
 ## 📜 ライセンス
 
-MIT License © 2026 Deterministic Text-to-SQL Contributors
+Apache License 2.0 © 2026 Satoshi Nagayasu
+
+詳細についてはプロジェクトルートの [LICENSE](LICENSE) ファイルを参照してください。
+
