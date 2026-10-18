@@ -37,6 +37,9 @@
 | ASTコンパイル | F-COMP-01 | 最短経路JOINリゾルバー | スロット間の外部キー最短経路を探索し自動JOIN句を導出 | 要件 C-1 |
 | ASTコンパイル | F-COMP-02 | 階層オントロジー縮退器 | 親子階層フィルタの冗長親条件を自動縮退・削除 | 要件 C-2 |
 | ASTコンパイル | F-COMP-03 | 型安全ASTビルダー & メトリクス展開器 | sqlglotを用いてASTノードを構築し、Ossieメトリクス計算式を展開して複数ダイアレクトへ変換 | 要件 C-3, C-4, E-2 |
+| ASTコンパイル | F-COMP-04 | 多軸GROUP BY & 時間ディメンション展開器 | 複数ディメンションのGROUP BY合成、および時間粒度式（EXTRACT/DATE_TRUNC）のAST展開 | 要件 A-5, C-5 |
+| ASTコンパイル | F-COMP-05 | 型安全HAVING句アセンブラ | 集計値フィルタ条件（HavingSlot）をパースしHAVING句ノードとして安全に合成 | 要件 C-6 |
+| スロット抽出 | F-JEV-03 | 多軸ディメンション & HAVING並列抽出器 | 自然言語から複数集計軸（年・国等）および集計値絞り込み条件（Having）を抽出 | 要件 B-3 |
 | HITL対話解決 | F-HITL-01 | 動的曖昧性検知 & 介入要求器 | 多重選択競合や同一シノニムを持つ複数メトリクスから動的に選択肢を組み立て介入要求を発行 | 要件 D-1 |
 | HITL対話解決 | F-HITL-02 | スラッシュ構文パーサー | クエリ末尾のスラッシュ補足を解釈しコンテキスト合成再実行 | 要件 D-2 |
 | CLI / エージェント | F-CLI-02 | AIエージェント向け機械可読出力 | 完全構造化JSON出力モード（--json）とスキーマ自己検査 | 要件 D-3 |
@@ -76,6 +79,11 @@
   - **対応要件**: 要件 B-2
   - **設計のポイント**: 未知の文字列やSQLインジェクション構文が混入した場合は無視または無効化し、クエリへの混入を物理的に遮断する。
 
+- **F-JEV-03: 多軸ディメンション & HAVING並列抽出器**
+  - **概要**: 自然言語クエリから複数ディメンション（`dimensions: list[str]`）および集計指標に対する絞り込み（`having_slots: list[HavingSlot]`）を並列抽出する。
+  - **対応要件**: 要件 B-3
+  - **設計のポイント**: Jev Criteria の `dimensions` 複数選択と、メトリクス比較条件（例: `total_revenue >= 1000000`）のパターン認識を連携させる。
+
 ### 機能カテゴリ3: 決定論的JOIN解決 & AST生成
 
 - **F-COMP-01: 最短経路JOINリゾルバー**
@@ -92,6 +100,16 @@
   - **概要**: `sqlglot.expressions` を用いて、`Select`, `From`, `Join`, `Where`, `Group`, `Order`, `Limit` ノードを純粋関数として組み立てる。
   - **対応要件**: 要件 C-3, E-2
   - **設計のポイント**: 文字列結合を一切行わず、AST構造体としてSQLを生成。指定ダイアレクト（PostgreSQL, DuckDB, SQLite, BigQuery, Snowflake等）へのトランスパイルを行う。
+
+- **F-COMP-04: 多軸GROUP BY & 時間ディメンション展開器**
+  - **概要**: 複数ディメンションスロットを `SELECT` 句および `GROUP BY` 句に展開し、時間粒度（`is_time`, `time_granularities`）や計算式（`expression`）を持つディメンションを `sqlglot.parse_one` で安全に AST 化する。
+  - **対応要件**: 要件 A-5, C-5
+  - **設計のポイント**: 式内の参照テーブルを自動抽出し、起点テーブルからの JOIN パスに確実に含める。
+
+- **F-COMP-05: 型安全HAVING句アセンブラ**
+  - **概要**: `having_slots` を `exp.Having` ノードとして組み立て、メトリクス計算式または alias との比較式を合成する。
+  - **対応要件**: 要件 C-6
+  - **設計のポイント**: WHERE 句ではなく HAVING 句に配置することで、集約関数の構文エラーを防止する。
 
 ### 機能カテゴリ4: Human-in-the-Loop (HITL) 対話解決
 
@@ -325,8 +343,41 @@ TyperおよびRichによる対話的CLIツールを提供します。ワンシ�
   - `title`: str
   - `description`: str
   - `tables`: List[TableMetadata] (テーブル物理定義、PK、FK、カラム一覧)
+  - `dimensions`: List[DimensionMetadata] (セマンティック時間ディメンション、計算式、シノニム)
   - `metrics`: List[MetricMetadata] (メトリクス名、計算式、シノニム)
   - `hierarchies`: List[HierarchyRule] (階層オントロジー親子マッピング)
+
+#### 3. 新設・拡張データモデル
+- **`DimensionMetadata` (セマンティック・ディメンション)**:
+  - `name`: str (ディメンション識別子、例: `order_year`)
+  - `expression`: Optional[str] (計算式、例: `EXTRACT(year FROM orders.o_orderdate)`)
+  - `description`: str (説明)
+  - `synonyms`: List[str] (自然言語シノニム、例: `["年", "年別", "注文年"]`)
+  - `is_time`: bool (時間ディメンションフラグ)
+  - `time_granularity`: Optional[str] (`'year'`, `'month'`, `'day'` 等)
+- **`HavingSlot` (集計値フィルタスロット)**:
+  - `metric`: str (集計指標名またはカラム名)
+  - `operator`: str (`>=`, `<=`, `=`, `>`, `<`, `!=`)
+  - `value`: Any (閾値数値またはリテラル)
+- **`ParsedSlots` (拡張後)**:
+  - `primary_table`: str
+  - `secondary_table`: str
+  - `dimension`: str (単一互換用)
+  - `dimensions`: List[str] (多軸集計用リスト)
+  - `metric`: str
+  - `ranking`: str
+  - `needs_clarification`: bool
+  - `filter_slots`: List[FilterSlot] (WHERE句用)
+  - `having_slots`: List[HavingSlot] (HAVING句用)
+  - `raw_response`: Dict[str, Any]
+- **`QueryIntent` (拡張後)**:
+  - `primary_table`: str
+  - `dimensions`: List[str] (複数集約軸)
+  - `metrics`: List[MetricSlot] (集約指標)
+  - `filters`: List[FilterSlot] (WHERE句フィルタ)
+  - `having`: List[HavingSlot] (HAVING句フィルタ)
+  - `limit`: Optional[int]
+  - `order_by`: List[OrderBySlot]
 
 ---
 
@@ -406,10 +457,10 @@ classDiagram
 | `OssieSchemaAdapter` | `load_from_yaml` | `path: Path` | Apache Ossie YAMLのパース、バリデーション、内部モデルへの正規化変換 | `SchemaMetadata` |
 | `SchemaLoader` | `load_from_json` | `path: Path` | 独自JSONパース及びPydanticバリデーション | `SchemaMetadata` |
 | `SchemaGraph` | `resolve_joins` | `primary: str, targets: List[str]` | NetworkX 最短パス探索と重複のないJOINステップリスト生成 | `List[JoinStep]` |
-| `JevClient` | `extract_slots` | `query: str, schema: Optional[SchemaMetadata]` | メタデータ駆動プロンプト構築、Jev API呼び出しとスロット解析 | `ParsedSlots` |
+| `JevClient` | `extract_slots` | `query: str, schema: Optional[SchemaMetadata]` | メタデータ駆動プロンプト構築、Jev API呼び出し、多軸ディメンション及びHAVINGフィルタ解析 | `ParsedSlots` |
 | `HITLManager` | `check_ambiguity` | `slots: ParsedSlots, clarification: Optional[str]` | 多重選択競合や拮抗確率の検知と動的HITLIssue生成 | `Optional[HITLIssue]` |
 | `OntologyDeduplicator` | `deduplicate` | `filters: List[FilterSlot]` | 親子オントロジーに基づく冗長親条件除外 (Subsumption) | `List[FilterSlot]` |
-| `GenericSQLBuilder` | `build` | `intent: QueryIntent, dialect: str` | sqlglot AST構築（メトリクス展開含む）とダイアレクトトランスパイル | `str` (SQL文字列) |
+| `GenericSQLBuilder` | `build` | `intent: QueryIntent, dialect: str` | sqlglot AST構築（多軸GROUP BY、時間ディメンション展開、HAVING句アセンブリ含む）とダイアレクトトランスパイル | `str` (SQL文字列) |
 
 ---
 
