@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from deterministic_text_to_sql.compiler.models import FilterSlot
+from deterministic_text_to_sql.compiler.models import FilterSlot, HavingSlot
 from deterministic_text_to_sql.jev.exceptions import JevResponseParseError
 from deterministic_text_to_sql.jev.models import ParsedSlots
 from deterministic_text_to_sql.schema.models import ColumnMetadata, SchemaMetadata
@@ -73,7 +73,8 @@ TPCH_REGIONS = {
 def extract_numeric_literals(text: str) -> list[float]:
     """Extract numeric literal values from text including negative numbers and decimals.
 
-    Supports formats like '1000', '-500', '0.05', '+250', and comma-formatted numbers '1,500.5'.
+    Supports formats like '1000', '-500', '0.05', '+250', comma-formatted numbers '1,500.5',
+    and Japanese unit multipliers like '1000万' (10,000,000) or '1億' (100,000,000).
 
     Args:
         text: Query or string to extract numbers from.
@@ -81,16 +82,23 @@ def extract_numeric_literals(text: str) -> list[float]:
     Returns:
         List of parsed float values in order of appearance.
     """
-    pattern = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+    pattern = r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:\s*(?:万|億))?"
     matches = re.finditer(pattern, text)
     results: list[float] = []
     for m in matches:
-        raw_val = m.group(0).replace(",", "")
+        raw_val = m.group(0).replace(",", "").strip()
         # Avoid standalone '+' or '-'
         if raw_val in ("+", "-"):
             continue
+        multiplier = 1.0
+        if raw_val.endswith("億"):
+            multiplier = 100_000_000.0
+            raw_val = raw_val[:-1].strip()
+        elif raw_val.endswith("万"):
+            multiplier = 10_000.0
+            raw_val = raw_val[:-1].strip()
         try:
-            results.append(float(raw_val))
+            results.append(float(raw_val) * multiplier)
         except ValueError:
             continue
     return results
@@ -301,20 +309,58 @@ def parse_jev_response(
         else:
             secondary_table = raw_secondary.lower()
 
-    # 3. Dimension Validation
-    raw_dim = str(slots_map.get("dimension", "none")).strip()
-    dimension = "none"
-    if raw_dim and raw_dim.lower() != "none":
-        clean_dim = raw_dim.split(".")[-1]
+    # 3. Dimension Validation (Supports multi-dimension and single-dimension backward compatibility)
+    raw_dims_input = slots_map.get("dimensions")
+    raw_dim_input = slots_map.get("dimension")
+    dim_candidates: list[str] = []
+
+    if isinstance(raw_dims_input, list):
+        for d in raw_dims_input:
+            if isinstance(d, str):
+                dim_candidates.append(d)
+    elif isinstance(raw_dims_input, str) and raw_dims_input.strip():
+        for part in re.split(r"[,、\s]+", raw_dims_input.strip()):
+            if part:
+                dim_candidates.append(part)
+
+    if isinstance(raw_dim_input, list):
+        for d in raw_dim_input:
+            if isinstance(d, str) and d not in dim_candidates:
+                dim_candidates.append(d)
+    elif isinstance(raw_dim_input, str) and raw_dim_input.strip():
+        for part in re.split(r"[,、\s]+", raw_dim_input.strip()):
+            if part and part not in dim_candidates:
+                dim_candidates.append(part)
+
+    resolved_dimensions: list[str] = []
+    for cand in dim_candidates:
+        cand_clean = cand.strip()
+        if not cand_clean or cand_clean.lower() == "none":
+            continue
+
         if schema is not None:
-            dim_tbl, dim_col = _resolve_column_and_table(clean_dim, primary_table, schema)
+            # A. Semantic dimension lookup in schema.dimensions (e.g. orders_year)
+            dim_meta = schema.get_dimension(cand_clean)
+            if dim_meta is not None:
+                if dim_meta.name not in resolved_dimensions:
+                    resolved_dimensions.append(dim_meta.name)
+                continue
+
+            # B. Table column lookup
+            clean_col = cand_clean.split(".")[-1]
+            dim_tbl, dim_col = _resolve_column_and_table(clean_col, primary_table, schema)
             resolved_tbl = schema.get_table(dim_tbl)
             if resolved_tbl and resolved_tbl.get_column(dim_col) is not None:
-                dimension = dim_col
-            else:
-                dimension = "none"
+                formatted_dim = f"{dim_tbl}.{dim_col}" if "." in cand_clean else dim_col
+                if formatted_dim not in resolved_dimensions:
+                    resolved_dimensions.append(formatted_dim)
         else:
-            dimension = clean_dim
+            clean_col = cand_clean.split(".")[-1]
+            target_dim = cand_clean if "." in cand_clean else clean_col
+            if target_dim not in resolved_dimensions:
+                resolved_dimensions.append(target_dim)
+
+    dimension = resolved_dimensions[0] if resolved_dimensions else "none"
 
     # 4. Metric Validation
     valid_metrics = {
@@ -873,10 +919,179 @@ def parse_jev_response(
                     )
                     continue
 
-    # 7.4 Numeric Literal Filter Extraction (fallback if no numeric filter already provided)
-    has_numeric_filter = any(
-        isinstance(fs.value, (int, float)) and fs.operator in (">=", "<=", ">", "<", "=")
-        for fs in filter_slots
+    # 7.4 Having Slots Construction (F-JEV-03: Aggregate Filter Conditions)
+    having_slots: list[HavingSlot] = []
+
+    # 1. Direct having_slots or having list in raw response / slots_map
+    raw_having = slots_map.get("having_slots")
+    if raw_having is None:
+        raw_having = slots_map.get("having")
+
+    if isinstance(raw_having, list):
+        for item in raw_having:
+            if isinstance(item, HavingSlot):
+                having_slots.append(item)
+            elif isinstance(item, dict):
+                m = str(item.get("metric", "")).strip()
+                op = str(item.get("operator", "=")).strip()
+                val_val: Any = item.get("value")
+                op = op_map.get(op, op)
+                if m and val_val is not None:
+                    try:
+                        v_num = float(val_val)
+                        if v_num.is_integer():
+                            val_val = int(v_num)
+                    except (ValueError, TypeError):
+                        pass
+                    if schema is not None:
+                        metric_def = schema.get_metric(m)
+                        if metric_def is not None:
+                            m = metric_def.name
+                    having_slots.append(HavingSlot(metric=m, operator=op, value=val_val))
+
+    # 2. Structured answers from Jev questions (has_having_filter, having_metric, having_operator)
+    has_having = slots_map.get("has_having_filter")
+    having_metric_cand = str(slots_map.get("having_metric", "none")).strip()
+    having_op_cand = str(slots_map.get("having_operator", "none")).strip()
+    having_item = slots_map.get("_item_having_metric") or {}
+    having_conf = (
+        float(having_item.get("confidence", 0.0)) if isinstance(having_item, dict) else 0.0
+    )
+    has_having_val = (
+        float(has_having)
+        if isinstance(has_having, (int, float))
+        else (0.5 if has_having is True else 0.0)
+    )
+
+    if (
+        having_metric_cand != "none"
+        and (has_having_val > 0.35 or having_conf > 0.6 or has_having is None)
+    ):
+        resolved_op = op_map.get(having_op_cand, having_op_cand)
+        if resolved_op not in (">=", "<=", ">", "<", "=", "!="):
+            resolved_op = ">="
+
+        target_metric = having_metric_cand
+        if schema is not None:
+            metric_def = schema.get_metric(having_metric_cand)
+            if metric_def is not None:
+                target_metric = metric_def.name
+
+        val_cand = slots_map.get("having_value")
+        if val_cand is not None:
+            try:
+                v_num = float(val_cand)
+                having_val: Any = int(v_num) if v_num.is_integer() else v_num
+            except (ValueError, TypeError):
+                having_val = val_cand
+        else:
+            nums = extract_numeric_literals(query)
+            if ranking == "top_5" and 5.0 in nums:
+                nums.remove(5.0)
+            elif ranking == "top_10" and 10.0 in nums:
+                nums.remove(10.0)
+            if nums:
+                n0 = nums[0]
+                having_val = int(n0) if n0.is_integer() else n0
+            else:
+                having_val = 0
+
+        having_slots.append(
+            HavingSlot(
+                metric=target_metric,
+                operator=resolved_op,
+                value=having_val,
+            )
+        )
+
+    # 3. Fallback extraction from query when query mentions aggregate filters
+    if not having_slots and (dimension != "none" or len(resolved_dimensions) > 0):
+        is_agg_query = any(
+            kw in query for kw in ["以上", "以下", "超", "未満", ">=", "<=", ">", "<"]
+        ) and any(
+            kw in query
+            for kw in [
+                "売上",
+                "金額",
+                "数量",
+                "回数",
+                "合計",
+                "平均",
+                "件数",
+                "revenue",
+                "quantity",
+                "count",
+                "price",
+            ]
+        )
+        if is_agg_query:
+            target_metric = metric
+            if (
+                target_metric not in ("count_records", "raw_list")
+                or "件数" in query
+                or "回数" in query
+            ):
+                nums = extract_numeric_literals(query)
+                if ranking == "top_5" and 5.0 in nums:
+                    nums.remove(5.0)
+                elif ranking == "top_10" and 10.0 in nums:
+                    nums.remove(10.0)
+
+                if nums:
+                    n0 = nums[0]
+                    having_val = int(n0) if n0.is_integer() else n0
+
+                    if any(kw in query for kw in [">=", "以上", "at least", "より多い"]):
+                        op = ">="
+                    elif any(kw in query for kw in ["<=", "以下", "at most", "未満でない"]):
+                        op = "<="
+                    elif any(kw in query for kw in [">", "超", "より大きい", "greater than"]):
+                        op = ">"
+                    elif any(kw in query for kw in ["<", "未満", "より小さい", "less than"]):
+                        op = "<"
+                    else:
+                        op = "="
+
+                    if schema is not None:
+                        if "売上" in query or "金額" in query:
+                            m_def = (
+                                schema.get_metric("total_revenue")
+                                or schema.get_metric("sum_revenue")
+                            )
+                            if m_def:
+                                target_metric = m_def.name
+                        elif "数量" in query:
+                            m_def = (
+                                schema.get_metric("total_quantity")
+                                or schema.get_metric("sum_quantity")
+                            )
+                            if m_def:
+                                target_metric = m_def.name
+
+                    having_slots.append(
+                        HavingSlot(
+                            metric=target_metric,
+                            operator=op,
+                            value=having_val,
+                        )
+                    )
+
+    # Deduplicate having slots while preserving order
+    unique_having: list[HavingSlot] = []
+    seen_having_keys: set[tuple[str, str, Any]] = set()
+    for hs in having_slots:
+        h_key = (hs.metric, hs.operator, str(hs.value))
+        if h_key not in seen_having_keys:
+            seen_having_keys.add(h_key)
+            unique_having.append(hs)
+
+    # 7.5 Numeric Literal Filter Extraction (fallback if no numeric/having filter provided)
+    has_numeric_filter = (
+        any(
+            isinstance(fs.value, (int, float)) and fs.operator in (">=", "<=", ">", "<", "=")
+            for fs in filter_slots
+        )
+        or bool(unique_having)
     )
     if not has_numeric_filter:
         numeric_values = extract_numeric_literals(query)
@@ -954,9 +1169,11 @@ def parse_jev_response(
         primary_table=primary_table,
         secondary_table=secondary_table,
         dimension=dimension,
+        dimensions=resolved_dimensions,
         metric=metric,
         ranking=ranking,
         needs_clarification=needs_clarification,
         filter_slots=unique_filters,
+        having_slots=unique_having,
         raw_response=response_data,
     )

@@ -36,6 +36,7 @@ TPCH_DIMENSION_CRITERIA: dict[str, str] = {
     "p_name": "部品名",
     "s_name": "仕入先名",
     "o_orderdate": "注文日",
+    "orders_year": "注文年・年別 (EXTRACT(year FROM orders.o_orderdate))",
     "none": "全体集計または個別リスト（GROUP BYなし）",
 }
 
@@ -196,6 +197,14 @@ def _build_dynamic_criteria(
                     else f"{t.name}.{col.name}"
                 )
                 dimension_criteria[col.name] = desc
+
+    # Inject semantic and time dimensions (F-JEV-03)
+    if schema.dimensions:
+        for d in schema.dimensions:
+            syn_str = f" ({'・'.join(d.synonyms)})" if d.synonyms else ""
+            desc = f"{d.description or d.name}{syn_str}"
+            dimension_criteria[d.name] = desc
+
     dimension_criteria["none"] = "全体集計または個別リスト（GROUP BYなし）"
 
     # 3. Metrics
@@ -320,6 +329,7 @@ def _build_dynamic_criteria(
 def build_jev_payload(
     eval_state: str,
     schema: SchemaMetadata | None = None,
+    include_multidim: bool | None = None,
 ) -> dict[str, Any]:
     """Build the structured JSON payload for TypeSafe Jev System 1 classification API.
 
@@ -333,6 +343,8 @@ def build_jev_payload(
         schema: Optional semantic schema metadata to dynamically extract valid table,
             dimension, metric, numeric column, and master criteria. If omitted or empty,
             standard TPC-H fallback choices are used.
+        include_multidim: Optional flag to explicitly enable or disable multidim and
+            HAVING questions. If None, auto-detected from schema.dimensions or query keywords.
 
     Returns:
         Structured payload dictionary ready for POST /v1/systemone.
@@ -358,6 +370,24 @@ def build_jev_payload(
             master_region_criteria,
         ) = _build_dynamic_criteria(schema)
 
+    # Determine whether multidim/having questions should be injected
+    if include_multidim is True:
+        should_include_multidim = True
+    elif include_multidim is False:
+        should_include_multidim = False
+    else:
+        has_schema_dims = bool(schema is not None and schema.dimensions)
+        has_having_query = any(
+            kw in eval_state for kw in ["以上", "以下", "超", "未満", ">=", "<="]
+        ) and any(
+            kw in eval_state
+            for kw in ["売上", "金額", "数量", "回数", "合計", "件数", "revenue", "quantity"]
+        )
+        has_multidim_query = any(
+            kw in eval_state for kw in ["かつ", "および", "並びに", "多軸"]
+        )
+        should_include_multidim = has_schema_dims or has_having_query or has_multidim_query
+
     questions: dict[str, Any] = {
         "primary_table": {
             "type": "choice",
@@ -374,67 +404,104 @@ def build_jev_payload(
             "instructions": "集計やグループ化（GROUP BY）の基準ディメンションはどれですか？",
             "criteria": dimension_criteria,
         },
-        "metric": {
-            "type": "choice",
-            "instructions": "計算・集計すべきメトリクスはどれですか？",
-            "criteria": metric_criteria,
-        },
-        "ranking": {
-            "type": "choice",
-            "instructions": "ランキングや上位件数指定はありますか？",
-            "criteria": RANKING_CRITERIA,
-        },
-        "needs_clarification": {
-            "type": "noul",
-            "instructions": (
-                "質問内容に複数の集計方法やテーブル候補として解釈可能な曖昧さ"
-                "（補足確認が必要な状態）がありますか？"
-            ),
-        },
-        "has_numeric_filter": {
-            "type": "noul",
-            "instructions": (
-                "質問文に「数値の比較・閾値条件（〇〇以上、〇〇未満、プラス等）」が"
-                "含まれていますか？"
-            ),
-        },
-        "numeric_column": {
-            "type": "choice",
-            "instructions": "数値条件の対象カラムはどれですか？",
-            "criteria": numeric_column_criteria,
-        },
-        "numeric_operator": {
-            "type": "choice",
-            "instructions": "数値条件の比較方向（演算子）はどれですか？",
-            "criteria": NUMERIC_OPERATOR_CRITERIA,
-        },
-        "has_exclusion_filter": {
-            "type": "noul",
-            "instructions": (
-                "質問文に「特定の状態（返品、キャンセル等）の除外指示」が"
-                "含まれていますか？"
-            ),
-        },
-        "exclusion_target": {
-            "type": "choice",
-            "instructions": "除外指示の対象ステータスはどれですか？",
-            "criteria": exclusion_target_criteria,
-        },
-        "has_master_filter": {
-            "type": "noul",
-            "instructions": "質問文に「国名や地域名などのマスターコード指定」が含まれていますか？",
-        },
-        "master_nation": {
-            "type": "choice",
-            "instructions": "指定されている国名はどれですか？",
-            "criteria": master_nation_criteria,
-        },
-        "master_region": {
-            "type": "choice",
-            "instructions": "指定されている地域名はどれですか？",
-            "criteria": master_region_criteria,
-        },
     }
+
+    if should_include_multidim:
+        questions["dimensions"] = {
+            "type": "choice",
+            "instructions": (
+                "集計やグループ化（GROUP BY）の基準ディメンション"
+                "（複数ある場合はカンマ区切りまたは該当ディメンション）はどれですか？"
+            ),
+            "criteria": dimension_criteria,
+        }
+
+    questions["metric"] = {
+        "type": "choice",
+        "instructions": "計算・集計すべきメトリクスはどれですか？",
+        "criteria": metric_criteria,
+    }
+    questions["ranking"] = {
+        "type": "choice",
+        "instructions": "ランキングや上位件数指定はありますか？",
+        "criteria": RANKING_CRITERIA,
+    }
+    questions["needs_clarification"] = {
+        "type": "noul",
+        "instructions": (
+            "質問内容に複数の集計方法やテーブル候補として解釈可能な曖昧さ"
+            "（補足確認が必要な状態）がありますか？"
+        ),
+    }
+
+    if should_include_multidim:
+        questions["has_having_filter"] = {
+            "type": "noul",
+            "instructions": (
+                "質問文に「集約・集計値に対する絞り込み・閾値条件"
+                "（売上1000万以上、注文回数5回以上など）」が含まれていますか？"
+            ),
+        }
+        questions["having_metric"] = {
+            "type": "choice",
+            "instructions": "集計値フィルタ（HAVING）の対象メトリクスはどれですか？",
+            "criteria": metric_criteria,
+        }
+        questions["having_operator"] = {
+            "type": "choice",
+            "instructions": "集計値フィルタ（HAVING）の比較演算子はどれですか？",
+            "criteria": NUMERIC_OPERATOR_CRITERIA,
+        }
+
+    questions.update(
+        {
+            "has_numeric_filter": {
+                "type": "noul",
+                "instructions": (
+                    "質問文に「数値の比較・閾値条件（〇〇以上、〇〇未満、プラス等）」が"
+                    "含まれていますか？"
+                ),
+            },
+            "numeric_column": {
+                "type": "choice",
+                "instructions": "数値条件の対象カラムはどれですか？",
+                "criteria": numeric_column_criteria,
+            },
+            "numeric_operator": {
+                "type": "choice",
+                "instructions": "数値条件の比較方向（演算子）はどれですか？",
+                "criteria": NUMERIC_OPERATOR_CRITERIA,
+            },
+            "has_exclusion_filter": {
+                "type": "noul",
+                "instructions": (
+                    "質問文に「特定の状態（返品、キャンセル等）の除外指示」が"
+                    "含まれていますか？"
+                ),
+            },
+            "exclusion_target": {
+                "type": "choice",
+                "instructions": "除外指示の対象ステータスはどれですか？",
+                "criteria": exclusion_target_criteria,
+            },
+            "has_master_filter": {
+                "type": "noul",
+                "instructions": (
+                    "質問文に「国名や地域名などのマスターコード指定」が含まれていますか？"
+                ),
+            },
+            "master_nation": {
+                "type": "choice",
+                "instructions": "指定されている国名はどれですか？",
+                "criteria": master_nation_criteria,
+            },
+            "master_region": {
+                "type": "choice",
+                "instructions": "指定されている地域名はどれですか？",
+                "criteria": master_region_criteria,
+            },
+        }
+    )
 
     return {
         "state": eval_state,
