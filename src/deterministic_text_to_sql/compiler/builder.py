@@ -10,6 +10,7 @@ from deterministic_text_to_sql.compiler.deduplicator import OntologyDeduplicator
 from deterministic_text_to_sql.compiler.exceptions import SQLBuildError
 from deterministic_text_to_sql.compiler.models import (
     FilterSlot,
+    HavingSlot,
     MetricSlot,
     OrderBySlot,
     QueryIntent,
@@ -293,6 +294,93 @@ class GenericSQLBuilder:
             parsed_node, primary_table, add_ref_table, context_name="metric"
         )
 
+    def _build_having_condition(
+        self,
+        having_slot: HavingSlot,
+        primary_table: str,
+        add_ref_table: Callable[[str | None], None],
+    ) -> exp.Expr:
+        """Construct a sqlglot AST comparison expression for a single HavingSlot.
+
+        Resolves semantic metrics to their parsed calculation AST, extracting
+        referenced tables for JOIN path resolution and ensuring ANSI SQL portability
+        (avoiding SELECT alias references in HAVING for dialects like Postgres).
+        Falls back to physical column resolution or column alias reference.
+
+        Args:
+            having_slot: Having specification slot.
+            primary_table: Primary table name for default column resolution.
+            add_ref_table: Callback to register referenced tables for JOIN resolution.
+
+        Returns:
+            sqlglot AST comparison expression node.
+
+        Raises:
+            SQLBuildError: If metric expression is invalid or operator is unsupported.
+        """
+        metric_name = having_slot.metric.strip()
+        left_node: exp.Expr
+
+        # 1. Resolve left expression (semantic metric, physical column, or alias)
+        metric_def = (
+            self._schema.get_metric(metric_name)
+            if hasattr(self._schema, "get_metric")
+            else None
+        )
+
+        if metric_def is not None:
+            expr_str = metric_def.expression.strip()
+            try:
+                parsed_node = sqlglot.parse_one(expr_str)
+            except Exception as e:
+                raise SQLBuildError(
+                    f"Failed to parse semantic metric expression '{expr_str}' "
+                    f"for having metric '{metric_def.name}': {e}"
+                ) from e
+            if parsed_node is None:
+                raise SQLBuildError(
+                    f"Failed to parse semantic metric expression '{expr_str}' "
+                    f"for having metric '{metric_def.name}': expression is empty or invalid"
+                )
+
+            self._extract_metric_tables_and_resolve_columns(
+                parsed_node, primary_table, add_ref_table
+            )
+            left_node = parsed_node
+        else:
+            try:
+                tbl_name, col_name = self._resolve_column(
+                    metric_name, default_table=primary_table
+                )
+                add_ref_table(tbl_name)
+                left_node = (
+                    exp.column(col_name, tbl_name)
+                    if tbl_name
+                    else exp.column(col_name)
+                )
+            except SQLBuildError:
+                left_node = exp.column(metric_name)
+
+        # 2. Derive right literal
+        right_node = self._to_literal(having_slot.value)
+
+        # 3. Construct comparison node
+        op = having_slot.operator.strip().upper()
+        if op == ">=":
+            return exp.GTE(this=left_node, expression=right_node)
+        if op == ">":
+            return exp.GT(this=left_node, expression=right_node)
+        if op == "<=":
+            return exp.LTE(this=left_node, expression=right_node)
+        if op == "<":
+            return exp.LT(this=left_node, expression=right_node)
+        if op in ("=", "=="):
+            return exp.EQ(this=left_node, expression=right_node)
+        if op in ("!=", "<>"):
+            return exp.NEQ(this=left_node, expression=right_node)
+
+        raise SQLBuildError(f"Unsupported HAVING operator: '{having_slot.operator}'")
+
     def build(
         self,
         intent: QueryIntent | dict[str, Any],
@@ -541,6 +629,12 @@ class GenericSQLBuilder:
             if flt_meta:
                 add_ref_table(flt_meta.name)
 
+        # Having referenced tables and conditions
+        having_conditions: list[exp.Expr] = []
+        for h_slot in norm_intent.having:
+            h_cond = self._build_having_condition(h_slot, primary_table, add_ref_table)
+            having_conditions.append(h_cond)
+
         # Default select if empty
         if not select_nodes:
             select_nodes = [exp.Star()]
@@ -582,9 +676,18 @@ class GenericSQLBuilder:
             )
             query = query.where(where_node)
 
-        # Group By clause (if metrics are present and dimensions exist)
-        if norm_intent.metrics and group_nodes:
+        # Group By clause (if metrics are present or having conditions exist, and dimensions exist)
+        if (norm_intent.metrics or having_conditions) and group_nodes:
             query = query.group_by(*group_nodes)
+
+        # Having clause
+        if having_conditions:
+            having_node = (
+                exp.and_(*having_conditions)
+                if len(having_conditions) > 1
+                else having_conditions[0]
+            )
+            query = query.having(having_node)
 
         # Order By clause
         if norm_intent.order_by:
