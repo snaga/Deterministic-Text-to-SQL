@@ -11,6 +11,7 @@ from deterministic_text_to_sql.schema.exceptions import SchemaValidationError
 from deterministic_text_to_sql.schema.models import (
     ColumnMetadata,
     ColumnRole,
+    DimensionMetadata,
     ForeignKeyMetadata,
     HierarchyRule,
     MetricDefinition,
@@ -26,6 +27,39 @@ VALID_ROLES: set[str] = {
     "attribute",
     "filter",
     "date_filter",
+}
+
+TIME_GRANULARITY_MAP: dict[str, dict[str, Any]] = {
+    "year": {
+        "base_synonyms": ["年", "年別"],
+        "extra_synonyms": ["年度"],
+        "suffix": "年",
+    },
+    "month": {
+        "base_synonyms": ["月", "月別"],
+        "extra_synonyms": [],
+        "suffix": "月",
+    },
+    "day": {
+        "base_synonyms": ["日", "日別"],
+        "extra_synonyms": [],
+        "suffix": "日",
+    },
+    "quarter": {
+        "base_synonyms": ["四半期", "四半期別"],
+        "extra_synonyms": [],
+        "suffix": "四半期",
+    },
+    "week": {
+        "base_synonyms": ["週", "週別"],
+        "extra_synonyms": [],
+        "suffix": "週",
+    },
+    "hour": {
+        "base_synonyms": ["時", "時間別"],
+        "extra_synonyms": [],
+        "suffix": "時",
+    },
 }
 
 
@@ -126,8 +160,9 @@ class OssieSchemaAdapter:
             title = data.get("name") or data.get("title")
             description = data.get("description")
 
-            # 1. Parse datasets into TableMetadata
+            # 1. Parse datasets into TableMetadata & time dimensions
             tables: list[TableMetadata] = []
+            dimensions: list[DimensionMetadata] = []
             dataset_list = data.get("datasets", [])
             if not isinstance(dataset_list, list):
                 raise SchemaValidationError(
@@ -141,6 +176,7 @@ class OssieSchemaAdapter:
                     )
                 table = cls._parse_dataset(ds)
                 tables.append(table)
+                cls._extract_time_dimensions(ds, table, dimensions)
 
             # 2. Parse relationships into TableMetadata.foreign_keys
             relationships_list = data.get("relationships", [])
@@ -155,7 +191,7 @@ class OssieSchemaAdapter:
                     if isinstance(m, dict):
                         metrics.append(cls._parse_metric(m))
 
-            # 4. Parse custom_extensions into HierarchyRule
+            # 4. Parse custom_extensions into HierarchyRule & DimensionMetadata
             hierarchies: list[HierarchyRule] = []
             custom_extensions = data.get("custom_extensions", [])
             if isinstance(custom_extensions, list):
@@ -171,6 +207,20 @@ class OssieSchemaAdapter:
                                 for h in raw_hierarchies:
                                     if isinstance(h, dict):
                                         hierarchies.append(HierarchyRule.model_validate(h))
+                            raw_dimensions = ext_data.get("dimensions", [])
+                            if isinstance(raw_dimensions, list):
+                                for d in raw_dimensions:
+                                    if isinstance(d, dict):
+                                        cls._upsert_dimension(
+                                            dimensions, DimensionMetadata.model_validate(d)
+                                        )
+
+            # Optional top-level dimensions
+            top_dims = data.get("dimensions", [])
+            if isinstance(top_dims, list):
+                for d in top_dims:
+                    if isinstance(d, dict):
+                        cls._upsert_dimension(dimensions, DimensionMetadata.model_validate(d))
 
             return SchemaMetadata(
                 title=title,
@@ -178,6 +228,7 @@ class OssieSchemaAdapter:
                 tables=tables,
                 metrics=metrics,
                 hierarchies=hierarchies,
+                dimensions=dimensions,
             )
         except ValidationError as e:
             raise SchemaValidationError(f"Schema validation failed: {e}") from e
@@ -397,3 +448,158 @@ class OssieSchemaAdapter:
             datatype=datatype,
             synonyms=synonyms,
         )
+
+    @classmethod
+    def _extract_time_dimensions(
+        cls,
+        ds: dict[str, Any],
+        table: TableMetadata,
+        dimensions: list[DimensionMetadata],
+    ) -> None:
+        """Extract time-based DimensionMetadata from dataset fields.
+
+        Args:
+            ds: Raw dataset dictionary from Ossie schema.
+            table: Parsed TableMetadata for this dataset.
+            dimensions: Target list to append extracted DimensionMetadata.
+        """
+        fields_list = ds.get("fields", [])
+        if not isinstance(fields_list, list):
+            return
+
+        for f in fields_list:
+            if not isinstance(f, dict):
+                continue
+            col_name = f.get("name")
+            if not col_name:
+                continue
+
+            dim_obj = f.get("dimension")
+            is_time = (f.get("is_time") is True) or (
+                isinstance(dim_obj, dict)
+                and (dim_obj.get("is_time") is True or dim_obj.get("type") in ("time", "date"))
+            )
+
+            # Extract granularities
+            raw_grans: Any = f.get("time_granularities")
+            if not raw_grans and isinstance(dim_obj, dict):
+                raw_grans = dim_obj.get("time_granularities") or dim_obj.get("type_params", {}).get(
+                    "time_granularities"
+                )
+
+            granularities: list[str] = []
+            if isinstance(raw_grans, list):
+                granularities = [str(g).strip().lower() for g in raw_grans if str(g).strip()]
+
+            # If either is_time is True or time_granularities list exists
+            if (is_time or bool(granularities)) and granularities:
+                col_meta = table.get_column(col_name)
+                col_synonyms = col_meta.synonyms if col_meta else []
+                col_desc = f.get("description") or (col_meta.description if col_meta else "")
+
+                for gran in granularities:
+                    dim_name = f"{table.name}_{gran}"
+                    if any(d.name == dim_name for d in dimensions):
+                        dim_name = f"{table.name}_{col_name}_{gran}"
+
+                    expression = f"EXTRACT({gran} FROM {table.name}.{col_name})"
+                    synonyms = cls._generate_time_dimension_synonyms(
+                        granularity=gran,
+                        table_synonyms=table.synonyms,
+                        col_synonyms=col_synonyms,
+                        col_description=col_desc,
+                    )
+                    description = (
+                        f"{col_desc} ({gran})"
+                        if col_desc
+                        else f"{table.name}.{col_name} based {gran} dimension"
+                    )
+
+                    dim_meta = DimensionMetadata(
+                        name=dim_name,
+                        expression=expression,
+                        description=description,
+                        synonyms=synonyms,
+                        is_time=True,
+                        time_granularity=gran,
+                    )
+                    cls._upsert_dimension(dimensions, dim_meta)
+
+    @classmethod
+    def _upsert_dimension(
+        cls,
+        dimensions: list[DimensionMetadata],
+        new_dim: DimensionMetadata,
+    ) -> None:
+        """Insert or replace DimensionMetadata by name in list."""
+        for i, existing in enumerate(dimensions):
+            if existing.name == new_dim.name:
+                dimensions[i] = new_dim
+                return
+        dimensions.append(new_dim)
+
+    @staticmethod
+    def _generate_time_dimension_synonyms(
+        granularity: str,
+        table_synonyms: list[str],
+        col_synonyms: list[str],
+        col_description: str = "",
+    ) -> list[str]:
+        """Generate natural language synonyms for a time dimension.
+
+        Args:
+            granularity: Time granularity (e.g. 'year', 'month').
+            table_synonyms: Synonyms of the parent table.
+            col_synonyms: Synonyms of the source column.
+            col_description: Logical description of the source column.
+
+        Returns:
+            List of generated natural language synonyms.
+        """
+        gran_lower = granularity.lower()
+        config = TIME_GRANULARITY_MAP.get(
+            gran_lower,
+            {"base_synonyms": [gran_lower], "extra_synonyms": [], "suffix": gran_lower},
+        )
+
+        synonyms: list[str] = list(config["base_synonyms"])
+
+        base_terms: list[str] = []
+        # 1. Extract base terms from column synonyms (e.g. "注文日" -> "注文")
+        time_suffixes = ["日付", "日時", "日", "時期"]
+        for s in col_synonyms:
+            for suffix_to_strip in time_suffixes:
+                if s.endswith(suffix_to_strip) and len(s) > len(suffix_to_strip):
+                    cand = s[: -len(suffix_to_strip)]
+                    if cand not in base_terms:
+                        base_terms.append(cand)
+            if s not in base_terms and not any(s.endswith(x) for x in time_suffixes):
+                base_terms.append(s)
+
+        # 2. Extract base terms from table synonyms (e.g. "注文", "オーダー")
+        for ts in table_synonyms:
+            if ts not in base_terms:
+                base_terms.append(ts)
+
+        # 3. Extract base terms from column description (e.g. "注文日" -> "注文")
+        if col_description:
+            for suffix_to_strip in ["日付", "日時", "日", "時期"]:
+                if col_description.endswith(suffix_to_strip) and len(col_description) > len(
+                    suffix_to_strip
+                ):
+                    cand = col_description[: -len(suffix_to_strip)]
+                    if cand not in base_terms:
+                        base_terms.append(cand)
+
+        suffix = config["suffix"]
+        for bt in base_terms:
+            term = f"{bt}{suffix}"
+            if term not in synonyms:
+                synonyms.append(term)
+
+        # 4. Append extra synonyms (e.g. "年度" for year)
+        for extra in config["extra_synonyms"]:
+            if extra not in synonyms:
+                synonyms.append(extra)
+
+        return synonyms

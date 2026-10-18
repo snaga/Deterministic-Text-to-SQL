@@ -11,6 +11,7 @@ from deterministic_text_to_sql.compiler.deduplicator import (
 from deterministic_text_to_sql.compiler.exceptions import CompilerError, SQLBuildError
 from deterministic_text_to_sql.compiler.models import (
     FilterSlot,
+    HavingSlot,
     MetricSlot,
     OrderBySlot,
     QueryIntent,
@@ -23,6 +24,7 @@ __all__ = [
     "CompilerError",
     "FilterSlot",
     "GenericSQLBuilder",
+    "HavingSlot",
     "HierarchyRule",
     "MetricSlot",
     "OntologyDeduplicator",

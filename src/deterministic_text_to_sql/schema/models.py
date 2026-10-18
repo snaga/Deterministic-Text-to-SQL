@@ -160,6 +160,29 @@ class HierarchyRule(BaseModel):
     child_to_parent: dict[str, str] = Field(default_factory=dict)
 
 
+class DimensionMetadata(BaseModel):
+    """Semantic dimension definition with optional calculation expression and time attributes.
+
+    Attributes:
+        name: Dimension identifier (e.g. 'order_year', 'orders_month').
+        expression: ANSI SQL expression for calculated dimensions
+            (e.g. 'EXTRACT(year FROM orders.o_orderdate)').
+        description: Logical description of the dimension.
+        synonyms: Natural language aliases or synonyms for slot mapping.
+        is_time: Flag indicating if this is a time-based dimension.
+        time_granularity: Granularity of time dimension (e.g. 'year', 'month', 'day').
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    name: str
+    expression: str | None = None
+    description: str = ""
+    synonyms: list[str] = Field(default_factory=list)
+    is_time: bool = False
+    time_granularity: str | None = None
+
+
 class SchemaMetadata(BaseModel):
     """Top-level semantic schema metadata container.
 
@@ -169,6 +192,7 @@ class SchemaMetadata(BaseModel):
         tables: List of table metadata definitions.
         metrics: List of semantic metric definitions.
         hierarchies: List of hierarchical ontology rules.
+        dimensions: List of semantic dimension definitions.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -178,6 +202,7 @@ class SchemaMetadata(BaseModel):
     tables: list[TableMetadata] = Field(default_factory=list)
     metrics: list[MetricDefinition] = Field(default_factory=list)
     hierarchies: list[HierarchyRule] = Field(default_factory=list)
+    dimensions: list[DimensionMetadata] = Field(default_factory=list)
 
     def get_table(self, table_name: str) -> TableMetadata | None:
         """Look up a table by name, alias, or synonym with case-insensitive fallback.
@@ -238,4 +263,33 @@ class SchemaMetadata(BaseModel):
             for syn in m.synonyms:
                 if syn.lower() == target_lower:
                     return m
+        return None
+
+    def get_dimension(self, name_or_synonym: str) -> DimensionMetadata | None:
+        """Look up a dimension by name or synonym with case-insensitive fallback.
+
+        Args:
+            name_or_synonym: Dimension name or synonym to find.
+
+        Returns:
+            DimensionMetadata if found, None otherwise.
+        """
+        # 1. Exact match on dimension name
+        for d in self.dimensions:
+            if d.name == name_or_synonym:
+                return d
+        # 2. Case-insensitive match on dimension name
+        target_lower = name_or_synonym.lower()
+        for d in self.dimensions:
+            if d.name.lower() == target_lower:
+                return d
+        # 3. Exact match on synonyms
+        for d in self.dimensions:
+            if name_or_synonym in d.synonyms:
+                return d
+        # 4. Case-insensitive match on synonyms
+        for d in self.dimensions:
+            for syn in d.synonyms:
+                if syn.lower() == target_lower:
+                    return d
         return None

@@ -58,6 +58,22 @@ class OrderBySlot(BaseModel):
     direction: str = "ASC"
 
 
+class HavingSlot(BaseModel):
+    """Slot representing a HAVING aggregation filter condition.
+
+    Attributes:
+        metric: Target aggregate metric name or column expression.
+        operator: SQL comparison operator (e.g. '>=', '<=', '=', '>', '<', '!=').
+        value: Filter comparison threshold value (e.g. number or literal).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    metric: str
+    operator: str
+    value: Any
+
+
 class QueryIntent(BaseModel):
     """Normalized intent representing semantic components for deterministic SQL assembly.
 
@@ -66,6 +82,7 @@ class QueryIntent(BaseModel):
         dimensions: Dimension columns (e.g. ['nation.n_name', 'orders.o_orderstatus']).
         metrics: Aggregation metrics as (col, agg) tuples or MetricSlot objects.
         filters: List of resolved filter slots.
+        having: List of resolved having filter slots.
         limit: Optional maximum rows limit.
         order_by: Sorting rules as (col, dir) tuples or OrderBySlot objects.
     """
@@ -76,5 +93,6 @@ class QueryIntent(BaseModel):
     dimensions: list[str] = Field(default_factory=list)
     metrics: list[tuple[str, str] | tuple[str, str, str] | MetricSlot] = Field(default_factory=list)
     filters: list[FilterSlot] = Field(default_factory=list)
+    having: list[HavingSlot] = Field(default_factory=list)
     limit: int | None = None
     order_by: list[tuple[str, str] | OrderBySlot] = Field(default_factory=list)

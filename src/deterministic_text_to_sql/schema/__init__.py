@@ -14,6 +14,7 @@ from deterministic_text_to_sql.schema.loader import (
 from deterministic_text_to_sql.schema.models import (
     ColumnMetadata,
     ColumnRole,
+    DimensionMetadata,
     ForeignKeyMetadata,
     HierarchyRule,
     MetricDefinition,
@@ -25,6 +26,7 @@ from deterministic_text_to_sql.schema.ossie import OssieSchemaAdapter
 __all__ = [
     "ColumnMetadata",
     "ColumnRole",
+    "DimensionMetadata",
     "ForeignKeyMetadata",
     "HierarchyRule",
     "MetricDefinition",
