@@ -223,13 +223,14 @@ class GenericSQLBuilder:
 
         raise SQLBuildError(f"Unsupported filter operator: '{filter_slot.operator}'")
 
-    def _extract_metric_tables_and_resolve_columns(
+    def _extract_tables_and_resolve_columns(
         self,
         parsed_node: exp.Expr,
         primary_table: str,
         add_ref_table: Callable[[str | None], None],
+        context_name: str = "expression",
     ) -> None:
-        """Extract all referenced tables from a parsed metric AST and resolve column references.
+        """Extract all referenced tables from a parsed AST expression and resolve column references.
 
         Traverses the AST for column references, resolves table qualification
         using schema metadata, and registers referenced tables for JOIN resolution.
@@ -238,6 +239,8 @@ class GenericSQLBuilder:
             parsed_node: Parsed sqlglot expression AST.
             primary_table: Primary table name for default column resolution.
             add_ref_table: Callback to register referenced tables for JOIN resolution.
+            context_name: Expression context name for clear error reporting
+                (e.g. 'metric', 'dimension').
 
         Raises:
             SQLBuildError: If a referenced table or column cannot be resolved.
@@ -248,8 +251,8 @@ class GenericSQLBuilder:
                     tbl_meta = self._schema.get_table(col_node.table)
                     if tbl_meta is None:
                         raise SQLBuildError(
-                            f"Table '{col_node.table}' in metric expression does not exist in "
-                            "schema"
+                            f"Table '{col_node.table}' in {context_name} expression "
+                            "does not exist in schema"
                         )
                     add_ref_table(tbl_meta.name)
                     col_node.set("table", exp.to_identifier(tbl_meta.name))
@@ -259,7 +262,8 @@ class GenericSQLBuilder:
                 tbl_meta = self._schema.get_table(col_node.table)
                 if tbl_meta is None:
                     raise SQLBuildError(
-                        f"Table '{col_node.table}' in metric expression does not exist in schema"
+                        f"Table '{col_node.table}' in {context_name} expression "
+                        "does not exist in schema"
                     )
                 col_meta = tbl_meta.get_column(col_node.name)
                 if col_meta is None:
@@ -277,6 +281,17 @@ class GenericSQLBuilder:
                     add_ref_table(tbl_name)
                     col_node.set("table", exp.to_identifier(tbl_name))
                 col_node.set("this", exp.to_identifier(col_name))
+
+    def _extract_metric_tables_and_resolve_columns(
+        self,
+        parsed_node: exp.Expr,
+        primary_table: str,
+        add_ref_table: Callable[[str | None], None],
+    ) -> None:
+        """Extract all referenced tables from a parsed metric AST (backward-compatible wrapper)."""
+        self._extract_tables_and_resolve_columns(
+            parsed_node, primary_table, add_ref_table, context_name="metric"
+        )
 
     def build(
         self,
@@ -321,6 +336,8 @@ class GenericSQLBuilder:
         select_nodes: list[exp.Expr] = []
         group_nodes: list[exp.Expr] = []
         alias_to_expr: dict[str, exp.Expr] = {}
+        dim_to_alias: dict[str, str] = {}
+        dim_to_expr: dict[str, exp.Expr] = {}
         metric_col_to_expr: dict[str, exp.Expr] = {}
         metric_col_to_alias: dict[str, str] = {}
 
@@ -333,19 +350,74 @@ class GenericSQLBuilder:
                 dim_str = dim_str[: len(parts[0])].strip()
                 dim_alias = dim[len(parts[0]) + 4 :].strip()
 
-            tbl_name, col_name = self._resolve_column(dim_str, default_table=primary_table)
-            add_ref_table(tbl_name)
+            dim_def = (
+                self._schema.get_dimension(dim_str)
+                if hasattr(self._schema, "get_dimension")
+                else None
+            )
 
-            col_node = exp.column(col_name, tbl_name) if tbl_name else exp.column(col_name)
+            # Case 1: Semantic dimension with calculation expression
+            if dim_def is not None and dim_def.expression:
+                expr_str = dim_def.expression.strip()
+                try:
+                    parsed_node = sqlglot.parse_one(expr_str)
+                except Exception as e:
+                    raise SQLBuildError(
+                        f"Failed to parse semantic dimension expression '{expr_str}' "
+                        f"for dimension '{dim_def.name}': {e}"
+                    ) from e
+                if parsed_node is None:
+                    raise SQLBuildError(
+                        f"Failed to parse semantic dimension expression '{expr_str}' "
+                        f"for dimension '{dim_def.name}': expression is empty or invalid"
+                    )
 
-            group_nodes.append(col_node)
+                self._extract_tables_and_resolve_columns(
+                    parsed_node, primary_table, add_ref_table, context_name="dimension"
+                )
 
-            if dim_alias:
-                aliased_node = exp.alias_(col_node, dim_alias)
+                final_alias = dim_alias if dim_alias else dim_def.name
+                aliased_node = exp.alias_(parsed_node, final_alias)
                 select_nodes.append(aliased_node)
-                alias_to_expr[dim_alias] = aliased_node
+                group_nodes.append(parsed_node.copy())
+
+                # Register alias mapping and expressions for ORDER BY lookup
+                alias_to_expr[final_alias] = aliased_node
+                alias_to_expr[dim_def.name] = aliased_node
+                alias_to_expr[dim_str] = aliased_node
+                for syn in dim_def.synonyms:
+                    alias_to_expr[syn] = aliased_node
+                dim_to_alias[final_alias] = final_alias
+                dim_to_alias[dim_def.name] = final_alias
+                dim_to_alias[dim_str] = final_alias
+                dim_to_expr[final_alias] = parsed_node
+                dim_to_expr[dim_def.name] = parsed_node
+                dim_to_expr[dim_str] = parsed_node
+
+            # Case 2: Physical column or dimension without expression
             else:
-                select_nodes.append(col_node)
+                target_col = dim_def.name if dim_def is not None else dim_str
+                tbl_name, col_name = self._resolve_column(target_col, default_table=primary_table)
+                add_ref_table(tbl_name)
+
+                col_node = exp.column(col_name, tbl_name) if tbl_name else exp.column(col_name)
+                group_nodes.append(col_node)
+
+                if dim_alias:
+                    aliased_node = exp.alias_(col_node, dim_alias)
+                    select_nodes.append(aliased_node)
+                    alias_to_expr[dim_alias] = aliased_node
+                    dim_to_alias[dim_alias] = dim_alias
+                    dim_to_alias[target_col] = dim_alias
+                else:
+                    select_nodes.append(col_node)
+                    if dim_def is not None:
+                        dim_to_alias[dim_def.name] = col_name
+
+                dim_to_expr[target_col] = col_node
+                if tbl_name:
+                    dim_to_expr[f"{tbl_name}.{col_name}"] = col_node
+                    dim_to_alias[f"{tbl_name}.{col_name}"] = dim_alias or col_name
 
         # Metrics
         for metric in norm_intent.metrics:
@@ -531,15 +603,23 @@ class GenericSQLBuilder:
                 order_target: exp.Expr
                 # 1. Alias match
                 if ord_col_clean in alias_to_expr:
-                    order_target = exp.column(ord_col_clean)
+                    aliased = alias_to_expr[ord_col_clean]
+                    target_name = aliased.alias if isinstance(aliased, exp.Alias) else ord_col_clean
+                    order_target = exp.column(target_name)
                 # 2. Metric alias lookup match
                 elif ord_col_clean in metric_col_to_alias:
                     order_target = exp.column(metric_col_to_alias[ord_col_clean])
                 # 3. Metric column match without alias (e.g. order by aggregate expr)
                 elif ord_col_clean in metric_col_to_expr:
                     order_target = metric_col_to_expr[ord_col_clean]
+                # 4. Dimension alias lookup match
+                elif ord_col_clean in dim_to_alias:
+                    order_target = exp.column(dim_to_alias[ord_col_clean])
+                # 5. Dimension expression match
+                elif ord_col_clean in dim_to_expr:
+                    order_target = dim_to_expr[ord_col_clean]
                 else:
-                    # 4. Resolve column
+                    # 6. Resolve column
                     tbl, col = self._resolve_column(ord_col_clean, default_table=primary_table)
                     order_target = exp.column(col, tbl) if tbl else exp.column(col)
 
