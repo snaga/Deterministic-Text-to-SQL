@@ -38,12 +38,14 @@ FLIGHTS_OSSIE_YAML = (
     / "flights.semantic_model.yaml"
 )
 
-EXPECTED_14_QUESTION_KEYS = {
+EXPECTED_16_QUESTION_KEYS = {
     "primary_table",
     "secondary_table",
     "dimension",
     "metric",
     "ranking",
+    "window_operation",
+    "window_partition_by",
     "needs_clarification",
     "has_numeric_filter",
     "numeric_column",
@@ -54,6 +56,7 @@ EXPECTED_14_QUESTION_KEYS = {
     "master_nation",
     "master_region",
 }
+EXPECTED_14_QUESTION_KEYS = EXPECTED_16_QUESTION_KEYS
 
 
 @pytest.fixture(scope="module")

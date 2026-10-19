@@ -55,6 +55,16 @@ RANKING_CRITERIA: dict[str, str] = {
     "none": "指定なし",
 }
 
+WINDOW_OPERATION_CRITERIA: dict[str, str] = {
+    "partitioned_rank": (
+        "グループ内順位・グループ別Top-N（例: 地域ごとの売上トップ3、カテゴリ別上位5件）"
+    ),
+    "time_shift": "時系列シフト・前期比（例: 前年比、YoY、前月比、MoM）",
+    "moving_avg": "移動平均（例: 直近3ヶ月平均）",
+    "cumulative": "累積推移・年初来合計（例: 累積売上、YTD）",
+    "none": "グループ内順位や時系列シフトなし（通常の集計または全体ランキング）",
+}
+
 NUMERIC_COLUMN_CRITERIA: dict[str, str] = {
     "c_acctbal": "顧客の口座残高 (customer.c_acctbal)",
     "ps_availqty": "部品の在庫数量 (partsupp.ps_availqty)",
@@ -425,6 +435,21 @@ def build_jev_payload(
         "type": "choice",
         "instructions": "ランキングや上位件数指定はありますか？",
         "criteria": RANKING_CRITERIA,
+    }
+    questions["window_operation"] = {
+        "type": "choice",
+        "instructions": (
+            "グループ内の順位付け（地域ごとのトップN等）や時系列の前期比（前年比/YoY等）が"
+            "求められていますか？"
+        ),
+        "criteria": WINDOW_OPERATION_CRITERIA,
+    }
+    questions["window_partition_by"] = {
+        "type": "choice",
+        "instructions": (
+            "グループ内順位付けのパーティション（区切り）となる軸・カラムはどれですか？"
+        ),
+        "criteria": dimension_criteria,
     }
     questions["needs_clarification"] = {
         "type": "noul",

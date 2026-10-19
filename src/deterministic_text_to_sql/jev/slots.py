@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
 from typing import Any
 
-from deterministic_text_to_sql.compiler.models import FilterSlot, HavingSlot
+from deterministic_text_to_sql.compiler.models import (
+    FilterSlot,
+    HavingSlot,
+    OrderBySlot,
+    WindowSlot,
+)
 from deterministic_text_to_sql.jev.exceptions import JevResponseParseError
 from deterministic_text_to_sql.jev.models import ParsedSlots
 from deterministic_text_to_sql.schema.models import ColumnMetadata, SchemaMetadata
@@ -1167,6 +1173,173 @@ def parse_jev_response(
             seen_filter_keys.add(key)
             unique_filters.append(fs)
 
+    # 8. Window Operation Slot Extraction (F-JEV-04 / B-4)
+    raw_window_op = slots_map.get("window_operation")
+    if (
+        raw_window_op is None
+        and "answers" in response_data
+        and isinstance(response_data["answers"], dict)
+    ):
+        ans_val = response_data["answers"].get("window_operation")
+        if isinstance(ans_val, dict):
+            raw_window_op = ans_val.get("choice", ans_val.get("value"))
+        else:
+            raw_window_op = ans_val
+    if raw_window_op is None:
+        raw_window_op = response_data.get("window_operation", "none")
+
+    window_op = str(raw_window_op).strip().lower() if raw_window_op else "none"
+    valid_window_ops = {"partitioned_rank", "time_shift", "moving_avg", "cumulative"}
+
+    window_slot: WindowSlot | None = None
+    if window_op in valid_window_ops:
+        # 8.1 Partition By Resolution
+        raw_partition = slots_map.get("window_partition_by")
+        if (
+            raw_partition is None
+            and "answers" in response_data
+            and isinstance(response_data["answers"], dict)
+        ):
+            ans_val = response_data["answers"].get("window_partition_by")
+            if isinstance(ans_val, dict):
+                raw_partition = ans_val.get("choice", ans_val.get("value"))
+            else:
+                raw_partition = ans_val
+        if raw_partition is None:
+            raw_partition = response_data.get("window_partition_by")
+
+        partition_by: list[str] = []
+        if raw_partition is not None:
+            partition_candidates: list[str] = []
+            if isinstance(raw_partition, list):
+                for p in raw_partition:
+                    if isinstance(p, str):
+                        partition_candidates.append(p)
+            elif isinstance(raw_partition, str) and raw_partition.strip():
+                for p in re.split(r"[,、\s]+", raw_partition.strip()):
+                    if p:
+                        partition_candidates.append(p)
+
+            for cand in partition_candidates:
+                cand_clean = cand.strip()
+                if not cand_clean or cand_clean.lower() == "none":
+                    continue
+
+                if schema is not None:
+                    # 1. Check semantic dimension in schema
+                    dim_meta = schema.get_dimension(cand_clean)
+                    if dim_meta is not None:
+                        if dim_meta.name not in partition_by:
+                            partition_by.append(dim_meta.name)
+                        continue
+
+                    # 2. Resolve column and table
+                    pt_name = cand_clean.split(".")[0] if "." in cand_clean else primary_table
+                    cand_tbl, cand_col = _resolve_column_and_table(cand_clean, pt_name, schema)
+                    tbl_meta = schema.get_table(cand_tbl)
+                    if tbl_meta is not None and tbl_meta.get_column(cand_col) is not None:
+                        resolved_key = f"{cand_tbl}.{cand_col}"
+                        if resolved_key not in partition_by:
+                            partition_by.append(resolved_key)
+                    # Safe fallback: if column does not exist in schema, skip
+                else:
+                    pt_name = cand_clean.split(".")[0] if "." in cand_clean else primary_table
+                    cand_tbl, cand_col = _resolve_column_and_table(cand_clean, pt_name, None)
+                    resolved_key = f"{cand_tbl}.{cand_col}"
+                    if resolved_key not in partition_by:
+                        partition_by.append(resolved_key)
+
+        # 8.2 Determine Target Metric
+        target_metric = metric
+
+        # 8.3 Window Slot Instantiation by Kind
+        if window_op == "partitioned_rank":
+            # Guard against mutual confusion (F-JEV-04): If partition_by solely consists
+            # of the aggregation dimension itself (e.g. partition_by=['c_custkey'] when
+            # dimension is 'c_custkey'), it is an overall ranking query, not a window rank.
+            norm_dims = {d.split(".")[-1] for d in resolved_dimensions}
+            norm_parts = {p.split(".")[-1] for p in partition_by}
+
+            if resolved_dimensions and norm_parts and norm_parts.issubset(norm_dims):
+                # Fall back to standard aggregation ranking, retaining ranking slot
+                window_slot = None
+            else:
+                # Extract ranking limit for intra-group top-N
+                limit_val: int | None = None
+                if "window_limit" in slots_map:
+                    with contextlib.suppress(ValueError, TypeError):
+                        limit_val = int(slots_map["window_limit"])
+
+                if limit_val is None:
+                    # Regex match for natural language (e.g. トップ3, 上位5件, top 3, Top 10)
+                    match_obj = re.search(r"(?:トップ|上位|top)\s*(\d+)", query, re.IGNORECASE)
+                    if match_obj:
+                        with contextlib.suppress(ValueError, TypeError):
+                            limit_val = int(match_obj.group(1))
+
+                if limit_val is None:
+                    if ranking == "top_5":
+                        limit_val = 5
+                    elif ranking == "top_10":
+                        limit_val = 10
+                    elif ranking.startswith("top_"):
+                        with contextlib.suppress(ValueError, TypeError, IndexError):
+                            limit_val = int(ranking.split("_")[1])
+
+                if limit_val is None:
+                    # Fallback to Japanese counter patterns (例: 3顧客, 3件)
+                    match_obj = re.search(r"(\d+)\s*(?:件|顧客|人|社|品|商品|行|位)", query)
+                    if match_obj:
+                        with contextlib.suppress(ValueError, TypeError):
+                            limit_val = int(match_obj.group(1))
+
+                if limit_val is None:
+                    limit_val = 5  # Safe default fallback
+
+                order_by_slots = [OrderBySlot(column=target_metric, direction="DESC")]
+                window_slot = WindowSlot(
+                    kind="partitioned_rank",
+                    function="ROW_NUMBER",
+                    partition_by=partition_by,
+                    order_by=order_by_slots,
+                    limit=limit_val,
+                    target_metric=target_metric,
+                )
+
+                # Reset overall ranking limit to avoid dual LIMIT application
+                ranking = "none"
+
+        elif window_op == "time_shift":
+            window_slot = WindowSlot(
+                kind="time_shift",
+                function="LAG",
+                partition_by=partition_by,
+                order_by=[],
+                offset=1,
+                limit=None,
+                target_metric=target_metric,
+            )
+        elif window_op == "moving_avg":
+            window_slot = WindowSlot(
+                kind="moving_avg",
+                function="AVG",
+                partition_by=partition_by,
+                order_by=[],
+                offset=1,
+                limit=None,
+                target_metric=target_metric,
+            )
+        elif window_op == "cumulative":
+            window_slot = WindowSlot(
+                kind="cumulative",
+                function="SUM",
+                partition_by=partition_by,
+                order_by=[],
+                offset=1,
+                limit=None,
+                target_metric=target_metric,
+            )
+
     return ParsedSlots(
         primary_table=primary_table,
         secondary_table=secondary_table,
@@ -1177,5 +1350,6 @@ def parse_jev_response(
         needs_clarification=needs_clarification,
         filter_slots=unique_filters,
         having_slots=unique_having,
+        window_slot=window_slot,
         raw_response=response_data,
     )
