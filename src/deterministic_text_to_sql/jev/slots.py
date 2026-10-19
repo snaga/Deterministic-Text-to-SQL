@@ -783,8 +783,13 @@ def parse_jev_response(
             for col in tbl.columns:
                 if col.values:
                     for val_item in col.values:
-                        if val_item.lower() in query.lower():
-                            filter_candidates.append(val_item)
+                        if len(val_item) == 1 and val_item.isalnum():
+                            pattern = rf"(?<![a-zA-Z0-9]){re.escape(val_item)}(?![a-zA-Z0-9])"
+                            if re.search(pattern, query, re.IGNORECASE):
+                                filter_candidates.append(val_item)
+                        else:
+                            if val_item.lower() in query.lower():
+                                filter_candidates.append(val_item)
 
         # C. Backward compatibility for TPC-H schema (nation/region tables)
         if schema.get_table("nation") is not None or schema.get_table("region") is not None:
@@ -1109,6 +1114,13 @@ def parse_jev_response(
         elif ranking == "top_10" and 10.0 in numeric_values:
             numeric_values.remove(10.0)
 
+        # Filter out any explicit top-N / ranking pattern numbers (e.g. トップ3, 上位5件)
+        top_match = re.search(r"(?:トップ|上位|top)\s*(\d+)", query, re.IGNORECASE)
+        if top_match:
+            top_val = float(top_match.group(1))
+            if top_val in numeric_values:
+                numeric_values.remove(top_val)
+
         if numeric_values:
             threshold = numeric_values[0]
             # Determine operator from keywords in query
@@ -1260,7 +1272,7 @@ def parse_jev_response(
             norm_dims = {d.split(".")[-1] for d in resolved_dimensions}
             norm_parts = {p.split(".")[-1] for p in partition_by}
 
-            if resolved_dimensions and norm_parts and norm_parts.issubset(norm_dims):
+            if resolved_dimensions and norm_parts and norm_dims.issubset(norm_parts):
                 # Fall back to standard aggregation ranking, retaining ranking slot
                 window_slot = None
             else:

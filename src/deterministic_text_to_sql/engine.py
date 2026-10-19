@@ -232,6 +232,7 @@ def _build_intent_from_slots(slots: ParsedSlots, schema: SchemaMetadata) -> Quer
         metrics=metrics,
         filters=filters,
         having=list(slots.having_slots),
+        window=slots.window_slot,
         limit=limit,
         order_by=order_by,
     )
