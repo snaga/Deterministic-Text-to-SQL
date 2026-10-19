@@ -6,7 +6,7 @@ from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from deterministic_text_to_sql.compiler.models import FilterSlot, HavingSlot
+from deterministic_text_to_sql.compiler.models import FilterSlot, HavingSlot, WindowSlot
 
 
 class RawSlots(BaseModel):
@@ -62,6 +62,7 @@ class ParsedSlots(BaseModel):
         needs_clarification: HITL intervention trigger flag.
         filter_slots: Whitelist-verified and deduplicated filter conditions.
         having_slots: Validated HAVING aggregation filter condition slots.
+        window_slot: Optional window function operation specification.
         raw_response: Original raw response from Jev API.
     """
 
@@ -76,6 +77,7 @@ class ParsedSlots(BaseModel):
     needs_clarification: bool = False
     filter_slots: list[FilterSlot] = Field(default_factory=list)
     having_slots: list[HavingSlot] = Field(default_factory=list)
+    window_slot: WindowSlot | None = None
     raw_response: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")

@@ -1,6 +1,6 @@
 """Data models for SQL compilation and AST building."""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -74,6 +74,32 @@ class HavingSlot(BaseModel):
     value: Any
 
 
+class WindowSlot(BaseModel):
+    """Window function operation specification for partitioned ranking and time shifts.
+
+    Attributes:
+        kind: Window operation category
+            ('partitioned_rank', 'time_shift', 'moving_avg', 'cumulative').
+        function: Window function name
+            (e.g. 'ROW_NUMBER', 'DENSE_RANK', 'LAG', 'LEAD', 'AVG', 'SUM').
+        partition_by: List of partition grouping column names.
+        order_by: Window ordering specifications.
+        offset: Shift offset for LAG/LEAD functions.
+        limit: Upper rank limit for intra-group Top-N filtering.
+        target_metric: Target metric column name for time-shift or aggregation calculations.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["partitioned_rank", "time_shift", "moving_avg", "cumulative"]
+    function: str = "ROW_NUMBER"
+    partition_by: list[str] = Field(default_factory=list)
+    order_by: list[OrderBySlot] = Field(default_factory=list)
+    offset: int = 1
+    limit: int | None = None
+    target_metric: str | None = None
+
+
 class QueryIntent(BaseModel):
     """Normalized intent representing semantic components for deterministic SQL assembly.
 
@@ -83,6 +109,7 @@ class QueryIntent(BaseModel):
         metrics: Aggregation metrics as (col, agg) tuples or MetricSlot objects.
         filters: List of resolved filter slots.
         having: List of resolved having filter slots.
+        window: Optional window function operation specification.
         limit: Optional maximum rows limit.
         order_by: Sorting rules as (col, dir) tuples or OrderBySlot objects.
     """
@@ -94,5 +121,6 @@ class QueryIntent(BaseModel):
     metrics: list[tuple[str, str] | tuple[str, str, str] | MetricSlot] = Field(default_factory=list)
     filters: list[FilterSlot] = Field(default_factory=list)
     having: list[HavingSlot] = Field(default_factory=list)
+    window: WindowSlot | None = None
     limit: int | None = None
     order_by: list[tuple[str, str] | OrderBySlot] = Field(default_factory=list)
