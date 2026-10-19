@@ -951,7 +951,23 @@ class GenericSQLBuilder:
                 )
             order_nodes.append(exp.Ordered(this=target_metric_expr.copy(), desc=True))
 
-        # 3. Assemble Window function expression and add to base SELECT
+        # 3. Ensure partition columns are projected in base query and grouped if aggregation exists
+        extra_partition_selects: list[tuple[exp.Expr, str]] = []
+        for p_node, p_col in zip(partition_nodes, partition_out_cols, strict=False):
+            if (
+                p_col not in components.dim_output_names
+                and p_col not in components.metric_output_names
+            ):
+                extra_partition_selects.append((p_node, p_col))
+                # Add to base SELECT
+                base_select_nodes.append(exp.alias_(p_node.copy(), p_col))
+                # If query aggregates, partition column must be in GROUP BY
+                if components.group_nodes and not any(
+                    str(gn).lower() == str(p_node).lower() for gn in components.group_nodes
+                ):
+                    components.group_nodes.append(p_node.copy())
+
+        # 4. Assemble Window function expression and add to base SELECT
         func_name = window.function.strip().upper() if window.function else "ROW_NUMBER"
         window_expr = exp.Window(
             this=exp.Anonymous(this=func_name),
@@ -960,12 +976,14 @@ class GenericSQLBuilder:
         )
         base_select_nodes.append(exp.alias_(window_expr, "rank_num"))
 
-        # 4. Construct Pass 1 Base CTE Query
+        # 5. Construct Pass 1 Base CTE Query
         base_query = self._assemble_base_query(components, base_select_nodes)
 
-        # 5. Construct Pass 2 Outer Query
+        # 6. Construct Pass 2 Outer Query
         cte_table_name = "ranked_base"
         outer_selects: list[exp.Expr] = []
+        for _, p_col in extra_partition_selects:
+            outer_selects.append(exp.column(p_col))
         for dim_name in components.dim_output_names:
             outer_selects.append(exp.column(dim_name))
         for m_name in components.metric_output_names:
