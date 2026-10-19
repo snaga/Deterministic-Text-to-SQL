@@ -15,6 +15,7 @@ from deterministic_text_to_sql.compiler.models import (
     MetricSlot,
     OrderBySlot,
     QueryIntent,
+    WindowSlot,
 )
 
 __all__ = [
@@ -31,4 +32,5 @@ __all__ = [
     "OrderBySlot",
     "QueryIntent",
     "SQLBuildError",
+    "WindowSlot",
 ]

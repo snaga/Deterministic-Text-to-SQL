@@ -1,6 +1,7 @@
 """Type-safe deterministic SQL query builder based on sqlglot AST nodes."""
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 import sqlglot
@@ -42,6 +43,28 @@ def _sqlite_extract_transform(generator: Any, expression: exp.Extract) -> str:
 
 
 SQLite.Generator.TRANSFORMS[exp.Extract] = _sqlite_extract_transform
+
+
+@dataclass
+class _QueryComponents:
+    """Internal container for prepared AST components before query assembly."""
+
+    primary_table: str
+    select_nodes: list[exp.Expr]
+    group_nodes: list[exp.Expr]
+    where_conditions: list[exp.Expr]
+    having_conditions: list[exp.Expr]
+    join_steps: list[Any]
+    alias_to_expr: dict[str, exp.Expr]
+    dim_to_alias: dict[str, str]
+    dim_to_expr: dict[str, exp.Expr]
+    dim_output_names: list[str] = field(default_factory=list)
+    dim_output_nodes: list[tuple[exp.Expr, str]] = field(default_factory=list)
+    metric_col_to_alias: dict[str, str] = field(default_factory=dict)
+    metric_col_to_expr: dict[str, exp.Expr] = field(default_factory=dict)
+    metric_output_names: list[str] = field(default_factory=list)
+    metric_output_nodes: list[tuple[exp.Expr, str]] = field(default_factory=list)
+    metric_agg_nodes: list[exp.Expr] = field(default_factory=list)
 
 
 class GenericSQLBuilder:
@@ -406,25 +429,18 @@ class GenericSQLBuilder:
 
         raise SQLBuildError(f"Unsupported HAVING operator: '{having_slot.operator}'")
 
-    def build(
-        self,
-        intent: QueryIntent | dict[str, Any],
-        dialect: str = "postgres",
-    ) -> str:
-        """Build a deterministic SQL query string from intent using sqlglot AST expressions.
+    def _prepare_components(self, norm_intent: QueryIntent) -> _QueryComponents:
+        """Prepare query AST components, resolving tables, columns, and expressions.
 
         Args:
-            intent: QueryIntent instance or dictionary conforming to QueryIntent.
-            dialect: Target SQL dialect (e.g. 'postgres', 'duckdb', 'sqlite', 'snowflake').
+            norm_intent: Validated QueryIntent.
 
         Returns:
-            Formatted SQL query string.
+            _QueryComponents instance containing parsed expressions and metadata.
 
         Raises:
-            SQLBuildError: If schema resolution, AST building, or dialect transpilation fails.
+            SQLBuildError: If schema resolution or AST parsing fails.
         """
-        norm_intent = self._normalize_intent(intent)
-
         # 1. Resolve and validate primary table
         primary_meta = self._schema.get_table(norm_intent.primary_table)
         if primary_meta is None:
@@ -451,8 +467,13 @@ class GenericSQLBuilder:
         alias_to_expr: dict[str, exp.Expr] = {}
         dim_to_alias: dict[str, str] = {}
         dim_to_expr: dict[str, exp.Expr] = {}
+        dim_output_names: list[str] = []
+        dim_output_nodes: list[tuple[exp.Expr, str]] = []
         metric_col_to_expr: dict[str, exp.Expr] = {}
         metric_col_to_alias: dict[str, str] = {}
+        metric_output_names: list[str] = []
+        metric_output_nodes: list[tuple[exp.Expr, str]] = []
+        metric_agg_nodes: list[exp.Expr] = []
 
         for dim in norm_intent.dimensions:
             # Check for alias syntax e.g. "col AS alias"
@@ -507,6 +528,9 @@ class GenericSQLBuilder:
                 dim_to_expr[dim_def.name] = parsed_node
                 dim_to_expr[dim_str] = parsed_node
 
+                dim_output_names.append(final_alias)
+                dim_output_nodes.append((parsed_node.copy(), final_alias))
+
             # Case 2: Physical column or dimension without expression
             else:
                 target_col = dim_def.name if dim_def is not None else dim_str
@@ -516,6 +540,7 @@ class GenericSQLBuilder:
                 col_node = exp.column(col_name, tbl_name) if tbl_name else exp.column(col_name)
                 group_nodes.append(col_node)
 
+                out_alias = dim_alias if dim_alias else col_name
                 if dim_alias:
                     aliased_node = exp.alias_(col_node, dim_alias)
                     select_nodes.append(aliased_node)
@@ -532,8 +557,11 @@ class GenericSQLBuilder:
                     dim_to_expr[f"{tbl_name}.{col_name}"] = col_node
                     dim_to_alias[f"{tbl_name}.{col_name}"] = dim_alias or col_name
 
+                dim_output_names.append(out_alias)
+                dim_output_nodes.append((col_node.copy(), out_alias))
+
         # Metrics
-        for metric in norm_intent.metrics:
+        for idx, metric in enumerate(norm_intent.metrics):
             if isinstance(metric, MetricSlot):
                 m_col = metric.column
                 m_agg = metric.agg
@@ -569,6 +597,7 @@ class GenericSQLBuilder:
                 )
                 agg_node = parsed_node
 
+                final_alias = m_alias or f"metric_{idx + 1}"
                 if m_alias:
                     metric_col_to_alias[m_expr_clean] = m_alias
                     if m_col_clean:
@@ -576,6 +605,10 @@ class GenericSQLBuilder:
                 metric_col_to_expr[m_expr_clean] = agg_node
                 if m_col_clean:
                     metric_col_to_expr[m_col_clean] = agg_node
+
+                metric_agg_nodes.append(agg_node.copy())
+                metric_output_names.append(final_alias)
+                metric_output_nodes.append((agg_node.copy(), final_alias))
 
             # Priority 2: Semantic metric defined in schema
             elif (
@@ -612,6 +645,10 @@ class GenericSQLBuilder:
                     metric_col_to_alias[syn] = m_alias
                     metric_col_to_expr[syn] = agg_node
 
+                metric_agg_nodes.append(agg_node.copy())
+                metric_output_names.append(m_alias)
+                metric_output_nodes.append((agg_node.copy(), m_alias))
+
             # Priority 3: Fallback to single-column aggregate function
             else:
                 if not m_col_clean:
@@ -635,6 +672,12 @@ class GenericSQLBuilder:
                 metric_col_to_expr[m_col_clean] = agg_node
                 if m_alias:
                     metric_col_to_alias[m_col_clean] = m_alias
+
+                fallback_suffix = col_name if m_col_clean != "*" else "count"
+                fallback_alias = m_alias or f"{m_agg.lower()}_{fallback_suffix}"
+                metric_agg_nodes.append(agg_node.copy())
+                metric_output_names.append(fallback_alias)
+                metric_output_nodes.append((agg_node.copy(), fallback_alias))
 
             if m_alias:
                 aliased_node = exp.alias_(agg_node, m_alias)
@@ -670,11 +713,46 @@ class GenericSQLBuilder:
         except UnconnectedSchemaError as e:
             raise SQLBuildError(f"Failed to resolve JOIN path: {e}") from e
 
-        # 5. Assemble query AST
-        query = sqlglot.select(*select_nodes).from_(exp.to_table(primary_table))
+        return _QueryComponents(
+            primary_table=primary_table,
+            select_nodes=select_nodes,
+            group_nodes=group_nodes,
+            where_conditions=where_conditions,
+            having_conditions=having_conditions,
+            join_steps=join_steps,
+            alias_to_expr=alias_to_expr,
+            dim_to_alias=dim_to_alias,
+            dim_to_expr=dim_to_expr,
+            dim_output_names=dim_output_names,
+            dim_output_nodes=dim_output_nodes,
+            metric_col_to_alias=metric_col_to_alias,
+            metric_col_to_expr=metric_col_to_expr,
+            metric_output_names=metric_output_names,
+            metric_output_nodes=metric_output_nodes,
+            metric_agg_nodes=metric_agg_nodes,
+        )
+
+    def _assemble_base_query(
+        self,
+        components: _QueryComponents,
+        select_nodes: list[exp.Expr],
+    ) -> exp.Select:
+        """Assemble base SELECT query AST with joins, filters, group by, and having.
+
+        Args:
+            components: Query components.
+            select_nodes: SELECT expressions for the base query.
+
+        Returns:
+            sqlglot Select AST node.
+
+        Raises:
+            SQLBuildError: If an ON clause cannot be parsed.
+        """
+        query = sqlglot.select(*select_nodes).from_(exp.to_table(components.primary_table))
 
         # Join clauses
-        for step in join_steps:
+        for step in components.join_steps:
             target_table_node = exp.to_table(step.to_table)
             on_clause: exp.Expr
             if step.join_pairs:
@@ -695,24 +773,50 @@ class GenericSQLBuilder:
             query = query.join(target_table_node, on=on_clause)
 
         # Where clause
-        if where_conditions:
+        if components.where_conditions:
             where_node = (
-                exp.and_(*where_conditions) if len(where_conditions) > 1 else where_conditions[0]
+                exp.and_(*components.where_conditions)
+                if len(components.where_conditions) > 1
+                else components.where_conditions[0]
             )
             query = query.where(where_node)
 
         # Group By clause (if metrics are present or having conditions exist, and dimensions exist)
-        if (norm_intent.metrics or having_conditions) and group_nodes:
-            query = query.group_by(*group_nodes)
+        has_metrics_or_having = bool(components.metric_output_nodes or components.having_conditions)
+        if has_metrics_or_having and components.group_nodes:
+            query = query.group_by(*components.group_nodes)
 
         # Having clause
-        if having_conditions:
+        if components.having_conditions:
             having_node = (
-                exp.and_(*having_conditions)
-                if len(having_conditions) > 1
-                else having_conditions[0]
+                exp.and_(*components.having_conditions)
+                if len(components.having_conditions) > 1
+                else components.having_conditions[0]
             )
             query = query.having(having_node)
+
+        return query
+
+    def _build_single_query(
+        self,
+        norm_intent: QueryIntent,
+        components: _QueryComponents,
+        dialect: str = "postgres",
+    ) -> str:
+        """Assemble single-pass SQL query string.
+
+        Args:
+            norm_intent: QueryIntent instance.
+            components: Prepared AST query components.
+            dialect: Target SQL dialect.
+
+        Returns:
+            Formatted SQL query string.
+
+        Raises:
+            SQLBuildError: If AST building or transpilation fails.
+        """
+        query = self._assemble_base_query(components, components.select_nodes)
 
         # Order By clause
         if norm_intent.order_by:
@@ -730,25 +834,29 @@ class GenericSQLBuilder:
 
                 order_target: exp.Expr
                 # 1. Alias match
-                if ord_col_clean in alias_to_expr:
-                    aliased = alias_to_expr[ord_col_clean]
-                    target_name = aliased.alias if isinstance(aliased, exp.Alias) else ord_col_clean
+                if ord_col_clean in components.alias_to_expr:
+                    aliased = components.alias_to_expr[ord_col_clean]
+                    target_name = (
+                        aliased.alias if isinstance(aliased, exp.Alias) else ord_col_clean
+                    )
                     order_target = exp.column(target_name)
                 # 2. Metric alias lookup match
-                elif ord_col_clean in metric_col_to_alias:
-                    order_target = exp.column(metric_col_to_alias[ord_col_clean])
+                elif ord_col_clean in components.metric_col_to_alias:
+                    order_target = exp.column(components.metric_col_to_alias[ord_col_clean])
                 # 3. Metric column match without alias (e.g. order by aggregate expr)
-                elif ord_col_clean in metric_col_to_expr:
-                    order_target = metric_col_to_expr[ord_col_clean]
+                elif ord_col_clean in components.metric_col_to_expr:
+                    order_target = components.metric_col_to_expr[ord_col_clean]
                 # 4. Dimension alias lookup match
-                elif ord_col_clean in dim_to_alias:
-                    order_target = exp.column(dim_to_alias[ord_col_clean])
+                elif ord_col_clean in components.dim_to_alias:
+                    order_target = exp.column(components.dim_to_alias[ord_col_clean])
                 # 5. Dimension expression match
-                elif ord_col_clean in dim_to_expr:
-                    order_target = dim_to_expr[ord_col_clean]
+                elif ord_col_clean in components.dim_to_expr:
+                    order_target = components.dim_to_expr[ord_col_clean]
                 else:
                     # 6. Resolve column
-                    tbl, col = self._resolve_column(ord_col_clean, default_table=primary_table)
+                    tbl, col = self._resolve_column(
+                        ord_col_clean, default_table=components.primary_table
+                    )
                     order_target = exp.column(col, tbl) if tbl else exp.column(col)
 
                 order_nodes.append(exp.Ordered(this=order_target, desc=desc))
@@ -761,8 +869,290 @@ class GenericSQLBuilder:
                 raise SQLBuildError(f"LIMIT cannot be negative: {norm_intent.limit}")
             query = query.limit(norm_intent.limit)
 
-        # 6. Dialect transpilation
+        # Dialect transpilation
         try:
             return query.sql(dialect=dialect, pretty=True)
         except Exception as e:
             raise SQLBuildError(f"Failed to transpile SQL query to dialect '{dialect}': {e}") from e
+
+    def _build_partitioned_rank_query(
+        self,
+        intent: QueryIntent,
+        components: _QueryComponents,
+        base_select_nodes: list[exp.Expr],
+        dialect: str = "postgres",
+    ) -> str:
+        """Construct two-pass CTE AST for partitioned ranking (e.g. intra-group Top-N).
+
+        Args:
+            intent: QueryIntent with window slot.
+            components: Query components.
+            base_select_nodes: Base SELECT nodes before rank_num window expression.
+            dialect: Target SQL dialect.
+
+        Returns:
+            Transpiled SQL string.
+
+        Raises:
+            SQLBuildError: If window parameters or transpilation fails.
+        """
+        window = intent.window
+        assert window is not None
+
+        # 1. Resolve PARTITION BY expressions
+        partition_nodes: list[exp.Expr] = []
+        partition_out_cols: list[str] = []
+        for p in window.partition_by:
+            p_clean = p.strip()
+            if p_clean in components.dim_to_expr:
+                partition_nodes.append(components.dim_to_expr[p_clean].copy())
+            else:
+                tbl, col = self._resolve_column(p_clean, default_table=components.primary_table)
+                partition_nodes.append(exp.column(col, tbl) if tbl else exp.column(col))
+
+            if p_clean in components.dim_to_alias:
+                partition_out_cols.append(components.dim_to_alias[p_clean])
+            else:
+                try:
+                    _, col = self._resolve_column(p_clean, default_table=components.primary_table)
+                    partition_out_cols.append(col)
+                except SQLBuildError:
+                    partition_out_cols.append(p_clean)
+
+        # 2. Resolve ORDER BY expressions inside Window
+        order_nodes: list[exp.Expr] = []
+        if window.order_by:
+            for ord_item in window.order_by:
+                col_clean = ord_item.column.strip()
+                desc = ord_item.direction.strip().upper() == "DESC"
+                target_expr: exp.Expr
+                if col_clean in components.metric_col_to_expr:
+                    target_expr = components.metric_col_to_expr[col_clean].copy()
+                elif col_clean in components.dim_to_expr:
+                    target_expr = components.dim_to_expr[col_clean].copy()
+                else:
+                    tbl, col = self._resolve_column(
+                        col_clean, default_table=components.primary_table
+                    )
+                    target_expr = exp.column(col, tbl) if tbl else exp.column(col)
+                order_nodes.append(exp.Ordered(this=target_expr, desc=desc))
+        else:
+            # Default order by: target metric DESC
+            target_metric_expr: exp.Expr | None = None
+            tm_key = window.target_metric.strip() if window.target_metric else None
+            if tm_key and tm_key in components.metric_col_to_expr:
+                target_metric_expr = components.metric_col_to_expr[tm_key]
+            elif components.metric_agg_nodes:
+                target_metric_expr = components.metric_agg_nodes[0]
+
+            if target_metric_expr is None:
+                raise SQLBuildError(
+                    "Partitioned ranking requires at least one metric or explicit window order_by"
+                )
+            order_nodes.append(exp.Ordered(this=target_metric_expr.copy(), desc=True))
+
+        # 3. Assemble Window function expression and add to base SELECT
+        func_name = window.function.strip().upper() if window.function else "ROW_NUMBER"
+        window_expr = exp.Window(
+            this=exp.Anonymous(this=func_name),
+            partition_by=partition_nodes if partition_nodes else None,
+            order=exp.Order(expressions=order_nodes) if order_nodes else None,
+        )
+        base_select_nodes.append(exp.alias_(window_expr, "rank_num"))
+
+        # 4. Construct Pass 1 Base CTE Query
+        base_query = self._assemble_base_query(components, base_select_nodes)
+
+        # 5. Construct Pass 2 Outer Query
+        cte_table_name = "ranked_base"
+        outer_selects: list[exp.Expr] = []
+        for dim_name in components.dim_output_names:
+            outer_selects.append(exp.column(dim_name))
+        for m_name in components.metric_output_names:
+            outer_selects.append(exp.column(m_name))
+
+        outer_query = (
+            exp.select(*outer_selects)
+            .from_(exp.to_table(cte_table_name))
+        )
+
+        if window.limit is not None:
+            outer_query = outer_query.where(
+                exp.LTE(this=exp.column("rank_num"), expression=exp.Literal.number(window.limit))
+            )
+
+        # Outer ORDER BY: partition columns + rank_num
+        outer_order: list[exp.Expr] = []
+        for p_col in partition_out_cols:
+            outer_order.append(exp.Ordered(this=exp.column(p_col), desc=False))
+        outer_order.append(exp.Ordered(this=exp.column("rank_num"), desc=False))
+        outer_query = outer_query.order_by(*outer_order)
+
+        # Attach CTE
+        outer_query = outer_query.with_(cte_table_name, as_=base_query)
+
+        try:
+            return outer_query.sql(dialect=dialect, pretty=True)
+        except Exception as e:
+            raise SQLBuildError(f"Failed to transpile SQL query to dialect '{dialect}': {e}") from e
+
+    def _build_time_shift_query(
+        self,
+        intent: QueryIntent,
+        components: _QueryComponents,
+        base_select_nodes: list[exp.Expr],
+        dialect: str = "postgres",
+    ) -> str:
+        """Construct two-pass CTE AST for time-series shift (e.g. YoY / MoM growth).
+
+        Args:
+            intent: QueryIntent with window slot.
+            components: Query components.
+            base_select_nodes: Base SELECT nodes.
+            dialect: Target SQL dialect.
+
+        Returns:
+            Transpiled SQL string.
+
+        Raises:
+            SQLBuildError: If parameters or transpilation fails.
+        """
+        window = intent.window
+        assert window is not None
+
+        if not components.dim_output_names:
+            raise SQLBuildError("Time shift window operation requires at least one dimension")
+        if not components.metric_output_names:
+            raise SQLBuildError("Time shift window operation requires at least one metric")
+
+        # 1. Identify time dimension and metric aliases
+        time_dim_alias = components.dim_output_names[0]
+        for name in components.dim_output_names:
+            lower = name.lower()
+            if any(k in lower for k in ("year", "month", "date", "day", "time")):
+                time_dim_alias = name
+                break
+
+        metric_alias = components.metric_output_names[0]
+        if window.target_metric:
+            tm_clean = window.target_metric.strip()
+            if tm_clean in components.metric_col_to_alias:
+                metric_alias = components.metric_col_to_alias[tm_clean]
+            elif tm_clean in components.metric_output_names:
+                metric_alias = tm_clean
+
+        # 2. Construct Pass 1 Base CTE Query
+        base_query = self._assemble_base_query(components, base_select_nodes)
+
+        # 3. Construct Window LAG and YoY expressions on outer query
+        offset = window.offset
+        lag_expr = exp.Window(
+            this=exp.Anonymous(
+                this="LAG",
+                expressions=[exp.column(metric_alias), exp.Literal.number(offset)],
+            ),
+            order=exp.Order(expressions=[exp.column(time_dim_alias)]),
+        )
+
+        diff_expr = exp.Paren(
+            this=exp.Sub(this=exp.column(metric_alias), expression=lag_expr.copy())
+        )
+        pct_expr = exp.Mul(this=diff_expr, expression=exp.Literal.number(100.0))
+        growth_expr = exp.Div(this=pct_expr, expression=lag_expr.copy())
+        rounded_growth = exp.Anonymous(
+            this="ROUND", expressions=[growth_expr, exp.Literal.number(2)]
+        )
+
+        cte_table_name = "time_series_base"
+        outer_selects: list[exp.Expr] = []
+        for d in components.dim_output_names:
+            outer_selects.append(exp.column(d))
+        for m in components.metric_output_names:
+            outer_selects.append(exp.column(m))
+        outer_selects.append(exp.alias_(lag_expr, f"prev_{metric_alias}"))
+        outer_selects.append(exp.alias_(rounded_growth, f"{metric_alias}_yoy_growth_pct"))
+
+        outer_query = (
+            exp.select(*outer_selects)
+            .from_(exp.to_table(cte_table_name))
+            .order_by(exp.column(time_dim_alias))
+            .with_(cte_table_name, as_=base_query)
+        )
+
+        try:
+            return outer_query.sql(dialect=dialect, pretty=True)
+        except Exception as e:
+            raise SQLBuildError(f"Failed to transpile SQL query to dialect '{dialect}': {e}") from e
+
+    def _build_window_cte_query(
+        self,
+        intent: QueryIntent,
+        components: _QueryComponents,
+        dialect: str = "postgres",
+    ) -> str:
+        """Build a two-pass CTE query with window functions.
+
+        Args:
+            intent: Validated QueryIntent containing window specifications.
+            components: Prepared AST query components.
+            dialect: Target SQL dialect.
+
+        Returns:
+            Formatted SQL query string.
+
+        Raises:
+            SQLBuildError: If window configuration is invalid or compilation fails.
+        """
+        assert intent.window is not None
+        window = intent.window
+
+        # Validate window operation kind
+        if window.kind not in ("partitioned_rank", "time_shift"):
+            raise SQLBuildError(f"Unsupported window kind: '{window.kind}'")
+        if window.offset <= 0:
+            raise SQLBuildError(f"Window offset must be positive, got: {window.offset}")
+        if window.limit is not None and window.limit < 0:
+            raise SQLBuildError(f"Window limit cannot be negative, got: {window.limit}")
+
+        # Assemble base query SELECT nodes with explicit aliases
+        base_select_nodes: list[exp.Expr] = [
+            exp.alias_(node.copy(), alias) for node, alias in components.dim_output_nodes
+        ] + [
+            exp.alias_(node.copy(), alias) for node, alias in components.metric_output_nodes
+        ]
+
+        if window.kind == "partitioned_rank":
+            return self._build_partitioned_rank_query(
+                intent, components, base_select_nodes, dialect=dialect
+            )
+        elif window.kind == "time_shift":
+            return self._build_time_shift_query(
+                intent, components, base_select_nodes, dialect=dialect
+            )
+        else:
+            raise SQLBuildError(f"Unsupported window kind: '{window.kind}'")
+
+    def build(
+        self,
+        intent: QueryIntent | dict[str, Any],
+        dialect: str = "postgres",
+    ) -> str:
+        """Build a deterministic SQL query string from intent using sqlglot AST expressions.
+
+        Args:
+            intent: QueryIntent instance or dictionary conforming to QueryIntent.
+            dialect: Target SQL dialect (e.g. 'postgres', 'duckdb', 'sqlite', 'snowflake').
+
+        Returns:
+            Formatted SQL query string.
+
+        Raises:
+            SQLBuildError: If schema resolution, AST building, or dialect transpilation fails.
+        """
+        norm_intent = self._normalize_intent(intent)
+        components = self._prepare_components(norm_intent)
+
+        if norm_intent.window is not None:
+            return self._build_window_cte_query(norm_intent, components, dialect=dialect)
+
+        return self._build_single_query(norm_intent, components, dialect=dialect)
