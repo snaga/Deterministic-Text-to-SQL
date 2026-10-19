@@ -39,7 +39,9 @@
 | ASTコンパイル | F-COMP-03 | 型安全ASTビルダー & メトリクス展開器 | sqlglotを用いてASTノードを構築し、Ossieメトリクス計算式を展開して複数ダイアレクトへ変換 | 要件 C-3, C-4, E-2 |
 | ASTコンパイル | F-COMP-04 | 多軸GROUP BY & 時間ディメンション展開器 | 複数ディメンションのGROUP BY合成、および時間粒度式（EXTRACT/DATE_TRUNC）のAST展開 | 要件 A-5, C-5 |
 | ASTコンパイル | F-COMP-05 | 型安全HAVING句アセンブラ | 集計値フィルタ条件（HavingSlot）をパースしHAVING句ノードとして安全に合成 | 要件 C-6 |
+| ASTコンパイル | F-COMP-06 | 2段CTE & ウィンドウ関数AST合成器 | グループ内Top-N（ROW_NUMBER）や時系列推移（LAG）を2段CTEパイプラインとして型安全に自動合成 | 要件 C-7 |
 | スロット抽出 | F-JEV-03 | 多軸ディメンション & HAVING並列抽出器 | 自然言語から複数集計軸（年・国等）および集計値絞り込み条件（Having）を抽出 | 要件 B-3 |
+| スロット抽出 | F-JEV-04 | ウィンドウ関数操作スロット抽出器 | 自然言語からグループ内順位（partitioned_rank）や時系列シフト（time_shift）のスロットを抽出 | 要件 B-4 |
 | HITL対話解決 | F-HITL-01 | 動的曖昧性検知 & 介入要求器 | 多重選択競合や同一シノニムを持つ複数メトリクスから動的に選択肢を組み立て介入要求を発行 | 要件 D-1 |
 | HITL対話解決 | F-HITL-02 | スラッシュ構文パーサー | クエリ末尾のスラッシュ補足を解釈しコンテキスト合成再実行 | 要件 D-2 |
 | CLI / エージェント | F-CLI-02 | AIエージェント向け機械可読出力 | 完全構造化JSON出力モード（--json）とスキーマ自己検査 | 要件 D-3 |
@@ -84,6 +86,11 @@
   - **対応要件**: 要件 B-3
   - **設計のポイント**: Jev Criteria の `dimensions` 複数選択と、メトリクス比較条件（例: `total_revenue >= 1000000`）のパターン認識を連携させる。
 
+- **F-JEV-04: ウィンドウ関数操作スロット抽出器**
+  - **概要**: 自然言語クエリからグループ内順位（`partitioned_rank`）や時系列シフト（`time_shift`）を識別し、パーティションキー、ソートキー、上位N件リミットを抽出する。
+  - **対応要件**: 要件 B-4
+  - **設計のポイント**: クエリ全体の `ORDER BY + LIMIT`（`ranking: top_N`）と、グループ内順位（`WindowSlot`）を直交する独立の Criteria として定義し、相互混同を防止する。
+
 ### 機能カテゴリ3: 決定論的JOIN解決 & AST生成
 
 - **F-COMP-01: 最短経路JOINリゾルバー**
@@ -110,6 +117,11 @@
   - **概要**: `having_slots` を `exp.Having` ノードとして組み立て、メトリクス計算式または alias との比較式を合成する。
   - **対応要件**: 要件 C-6
   - **設計のポイント**: WHERE 句ではなく HAVING 句に配置することで、集約関数の構文エラーを防止する。
+
+- **F-COMP-06: 2段CTE & ウィンドウ関数AST合成器**
+  - **概要**: `intent.window`（`WindowSlot`）に基づき、ベース集計クエリを共通テーブル式（CTE）として実体化し、外側クエリで `ROW_NUMBER() OVER (...)` 判定や `LAG(...)` による時系列比較を型安全に合成する。
+  - **対応要件**: 要件 C-7
+  - **設計のポイント**: ANSI SQL 制約を遵守し、外側クエリで `WHERE rank_num <= limit` を適用。単一パスの通常集計と 2段 CTE のパイプラインを決定論的に分岐する。
 
 ### 機能カテゴリ4: Human-in-the-Loop (HITL) 対話解決
 
@@ -359,6 +371,14 @@ TyperおよびRichによる対話的CLIツールを提供します。ワンシ�
   - `metric`: str (集計指標名またはカラム名)
   - `operator`: str (`>=`, `<=`, `=`, `>`, `<`, `!=`)
   - `value`: Any (閾値数値またはリテラル)
+- **`WindowSlot` (ウィンドウ関数操作スロット)**:
+  - `kind`: Literal["partitioned_rank", "time_shift", "moving_avg", "cumulative"] (ウィンドウ操作種別)
+  - `function`: str (関数名、例: `ROW_NUMBER`, `DENSE_RANK`, `LAG`, `LEAD`, `AVG`, `SUM`)
+  - `partition_by`: List[str] (パーティションキー一覧、例: `["region.r_name"]`)
+  - `order_by`: List[OrderBySlot] (ウィンドウ内ソートキー、例: `[OrderBySlot(column="total_revenue", direction="DESC")]`)
+  - `offset`: int (LAG/LEAD のシフト量、デフォルト: 1)
+  - `limit`: Optional[int] (グループ内 Top-N 上限、例: 3)
+  - `target_metric`: Optional[str] (対象集約指標、例: `total_revenue`)
 - **`ParsedSlots` (拡張後)**:
   - `primary_table`: str
   - `secondary_table`: str
@@ -369,6 +389,7 @@ TyperおよびRichによる対話的CLIツールを提供します。ワンシ�
   - `needs_clarification`: bool
   - `filter_slots`: List[FilterSlot] (WHERE句用)
   - `having_slots`: List[HavingSlot] (HAVING句用)
+  - `window_slot`: Optional[WindowSlot] (Window操作用)
   - `raw_response`: Dict[str, Any]
 - **`QueryIntent` (拡張後)**:
   - `primary_table`: str
@@ -376,6 +397,7 @@ TyperおよびRichによる対話的CLIツールを提供します。ワンシ�
   - `metrics`: List[MetricSlot] (集約指標)
   - `filters`: List[FilterSlot] (WHERE句フィルタ)
   - `having`: List[HavingSlot] (HAVING句フィルタ)
+  - `window`: Optional[WindowSlot] (Window操作仕様)
   - `limit`: Optional[int]
   - `order_by`: List[OrderBySlot]
 
@@ -439,6 +461,15 @@ classDiagram
         +build(intent: QueryIntent, dialect: str) str
     }
 
+    class WindowSlot {
+        +kind: str
+        +function: str
+        +partition_by: List~str~
+        +order_by: List~OrderBySlot~
+        +limit: Optional~int~
+        +target_metric: Optional~str~
+    }
+
     DeterministicTextToSQLEngine --> SchemaGraph
     DeterministicTextToSQLEngine --> JevClient
     DeterministicTextToSQLEngine --> HITLManager
@@ -446,6 +477,7 @@ classDiagram
     DeterministicTextToSQLEngine --> GenericSQLBuilder
     DeterministicTextToSQLEngine ..> OssieSchemaAdapter
     DeterministicTextToSQLEngine ..> SchemaLoader
+    GenericSQLBuilder ..> WindowSlot
 ```
 
 ### クラス詳細仕様 (IPO)
@@ -457,10 +489,10 @@ classDiagram
 | `OssieSchemaAdapter` | `load_from_yaml` | `path: Path` | Apache Ossie YAMLのパース、バリデーション、内部モデルへの正規化変換 | `SchemaMetadata` |
 | `SchemaLoader` | `load_from_json` | `path: Path` | 独自JSONパース及びPydanticバリデーション | `SchemaMetadata` |
 | `SchemaGraph` | `resolve_joins` | `primary: str, targets: List[str]` | NetworkX 最短パス探索と重複のないJOINステップリスト生成 | `List[JoinStep]` |
-| `JevClient` | `extract_slots` | `query: str, schema: Optional[SchemaMetadata]` | メタデータ駆動プロンプト構築、Jev API呼び出し、多軸ディメンション及びHAVINGフィルタ解析 | `ParsedSlots` |
+| `JevClient` | `extract_slots` | `query: str, schema: Optional[SchemaMetadata]` | メタデータ駆動プロンプト構築、Jev API呼び出し、多軸ディメンション、HAVINGフィルタ、Window操作解析 | `ParsedSlots` |
 | `HITLManager` | `check_ambiguity` | `slots: ParsedSlots, clarification: Optional[str]` | 多重選択競合や拮抗確率の検知と動的HITLIssue生成 | `Optional[HITLIssue]` |
 | `OntologyDeduplicator` | `deduplicate` | `filters: List[FilterSlot]` | 親子オントロジーに基づく冗長親条件除外 (Subsumption) | `List[FilterSlot]` |
-| `GenericSQLBuilder` | `build` | `intent: QueryIntent, dialect: str` | sqlglot AST構築（多軸GROUP BY、時間ディメンション展開、HAVING句アセンブリ含む）とダイアレクトトランスパイル | `str` (SQL文字列) |
+| `GenericSQLBuilder` | `build` | `intent: QueryIntent, dialect: str` | sqlglot AST構築（多軸GROUP BY、時間ディメンション、HAVING句、および2段CTE Window関数合成含む）とダイアレクトトランスパイル | `str` (SQL文字列) |
 
 ---
 
