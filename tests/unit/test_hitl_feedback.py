@@ -191,6 +191,26 @@ class TestHITLManagerCheckAmbiguity:
         issue = HITLManager.check_ambiguity(slots, clarification=None)
         assert issue is None
 
+    def test_no_trigger_when_third_table_wins_and_lineitem_orders_are_zero(self) -> None:
+        """Verify no false positive HITL issue when another table wins decisively."""
+        slots = ParsedSlots(
+            primary_table="customer",
+            metric="count_records",
+            needs_clarification=False,
+            raw_response={
+                "query": "日本の顧客一覧",
+                "table_probs": {
+                    "customer": 0.96,
+                    "nation": 0.04,
+                    "lineitem": 0.0,
+                    "orders": 0.0,
+                    "supplier": 0.0,
+                },
+            },
+        )
+        issue = HITLManager.check_ambiguity(slots, clarification=None)
+        assert issue is None
+
     def test_trigger_generic_ambiguity_issue(self) -> None:
         slots = ParsedSlots(
             primary_table="customer",

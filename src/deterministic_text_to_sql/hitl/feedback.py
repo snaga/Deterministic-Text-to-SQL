@@ -292,14 +292,19 @@ class HITLManager:
         # 4. Detect table competition
         competing_table: tuple[str, str, float, float] | None = None
         if table_probs:
-            # Check legacy lineitem vs orders explicitly for 100% backward compat
+            # Check legacy lineitem vs orders explicitly for 100% backward compat.
+            # Only trigger if at least one candidate has meaningful probability (>= 0.15)
+            # to prevent zero-probability false positives.
             if "lineitem" in table_probs and "orders" in table_probs:
                 try:
                     p_line = float(table_probs["lineitem"])
                     p_ord = float(table_probs["orders"])
-                    if abs(p_line - p_ord) <= 0.35:
+                    if max(p_line, p_ord) >= 0.15 and abs(p_line - p_ord) <= 0.35:
                         is_ambiguous = True
-                        competing_table = ("lineitem", "orders", p_line, p_ord)
+                        if p_line >= p_ord:
+                            competing_table = ("lineitem", "orders", p_line, p_ord)
+                        else:
+                            competing_table = ("orders", "lineitem", p_ord, p_line)
                 except (ValueError, TypeError):
                     pass
             if not competing_table:
