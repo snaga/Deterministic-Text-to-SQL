@@ -113,7 +113,7 @@
       "columns": [
         {"name": "o_orderkey", "type": "BIGINT", "description": "注文ID（主キー）", "role": "id"},
         {"name": "o_custkey", "type": "BIGINT", "description": "注文した顧客ID（外部キー: customer.c_custkey）", "role": "fk"},
-        {"name": "o_orderstatus", "type": "CHAR(1)", "description": "注文ステータス（O: 未完了/Open, F: 完了/Fulfilled, P: 保留/Pending）", "role": "filter", "values": ["O", "F", "P"]},
+        {"name": "o_orderstatus", "type": "CHAR(1)", "description": "注文ステータス（O: 未完了/Open, F: 完了/Fulfilled, P: 保留/Pending）", "role": "dimension", "values": ["O", "F", "P"]},
         {"name": "o_totalprice", "type": "DOUBLE PRECISION", "description": "注文合計金額", "role": "metric", "agg": ["SUM", "AVG", "MIN", "MAX"]},
         {"name": "o_orderdate", "type": "DATE", "description": "注文日", "role": "date_filter"},
         {"name": "o_orderpriority", "type": "CHAR(15)", "description": "注文優先度（1-URGENT, 2-HIGH, 3-MEDIUM, 4-NOT SPECIFIED, 5-LOW）", "role": "dimension"},

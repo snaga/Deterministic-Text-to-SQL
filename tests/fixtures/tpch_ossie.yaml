@@ -705,7 +705,7 @@ datasets:
       - name: o_orderstatus
         datatype: "CHAR(1)"
         description: "注文ステータス（O: 未完了/Open, F: 完了/Fulfilled, P: 保留/Pending）"
-        role: filter
+        role: dimension
         values:
           - O
           - F

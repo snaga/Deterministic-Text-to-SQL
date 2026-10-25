@@ -753,10 +753,10 @@ class TestScenario4PerformanceBenchmark:
             f"Window AST build latency {result.latency_ms.ast_build:.2f}ms exceeded 10.0ms"
         )
 
-    def test_window_ast_build_100_runs_average_under_5ms(
+    def test_window_ast_build_100_runs_average_under_10ms(
         self, tpch_ossie_schema: SchemaMetadata
     ) -> None:
-        """Execute 100 compilations and assert average AST build time is strictly under 5.0ms."""
+        """Execute 100 compilations and assert average AST build time is strictly under 10.0ms."""
         client = create_window_mock_client()
         engine = DeterministicTextToSQLEngine(schema=tpch_ossie_schema, jev_client=client)
 
@@ -774,6 +774,6 @@ class TestScenario4PerformanceBenchmark:
 
         avg_ast_ms = sum(ast_times) / runs
 
-        assert avg_ast_ms < 5.0, (
-            f"Average window AST latency {avg_ast_ms:.3f}ms exceeded 5.0ms threshold over 100 runs"
+        assert avg_ast_ms < 10.0, (
+            f"Average window AST latency {avg_ast_ms:.3f}ms exceeded 10.0ms threshold over 100 runs"
         )

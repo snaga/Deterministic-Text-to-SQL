@@ -186,6 +186,56 @@ class HITLManager:
         )
 
     @classmethod
+    def _build_dimension_issue(
+        cls,
+        dimension: str,
+        schema: Any | None,
+        base_query: str,
+    ) -> HITLIssue:
+        """Build dynamic HITLIssue for dimension clarification."""
+        dim_desc = ""
+        if schema:
+            if hasattr(schema, "get_dimension"):
+                d = schema.get_dimension(dimension)
+                if d and d.description:
+                    dim_desc = d.description
+            if not dim_desc and hasattr(schema, "tables"):
+                for tbl in schema.tables:
+                    col = tbl.get_column(dimension)
+                    if col and col.description:
+                        dim_desc = col.description
+                        break
+
+        label_a = (
+            f"{dim_desc} ({dimension})" if dim_desc else f"ディメンション: {dimension}"
+        )
+        hint_a = (
+            f"{dim_desc} ごとにグループ化して集計します"
+            if dim_desc
+            else f"{dimension} を基準にグループ化して集計します"
+        )
+
+        return HITLIssue(
+            title="集計軸の確認 (Dimension Clarification Required)",
+            question=f"集計軸として「{dimension}」を採用しますか？それとも全体集計を行いますか？",
+            options=[
+                HITLOption(
+                    key="A",
+                    label=label_a,
+                    hint=hint_a,
+                    clarification_text=dimension,
+                ),
+                HITLOption(
+                    key="B",
+                    label="全体集計（ディメンションなし）",
+                    hint="特定の軸でグループ化せず、全体を対象に集計します",
+                    clarification_text="全体集計",
+                ),
+            ],
+            base_query=base_query,
+        )
+
+    @classmethod
     def check_ambiguity(
         cls,
         slots: ParsedSlots,
@@ -395,10 +445,19 @@ class HITLManager:
             elif slots.primary_table and slots.secondary_table and slots.secondary_table != "none":
                 t1, t2 = slots.primary_table, slots.secondary_table
 
-            if t1 and t2:
+            if t1 and t2 and t1 != t2:
                 return cls._build_table_issue(t1, t2, schema, base_query)
 
         # 5.3 Fallback to generic ambiguity issue
+        has_distinct_secondary = (
+            bool(slots.secondary_table)
+            and slots.secondary_table != "none"
+            and slots.secondary_table != slots.primary_table
+        )
+
+        if not has_distinct_secondary and slots.dimension and slots.dimension != "none":
+            return cls._build_dimension_issue(slots.dimension, schema, base_query)
+
         return HITLIssue(
             title="クエリ解釈の確認 (Query Clarification Required)",
             question="複数の解釈候補が存在します。意図する条件を選択してください。",
@@ -413,13 +472,13 @@ class HITLManager:
                     key="B",
                     label=(
                         f"関連テーブル: {slots.secondary_table}"
-                        if slots.secondary_table != "none"
+                        if has_distinct_secondary
                         else "関連テーブル: その他"
                     ),
                     hint="関連テーブルを基準に集計します",
                     clarification_text=(
                         slots.secondary_table
-                        if slots.secondary_table != "none"
+                        if has_distinct_secondary
                         else "その他"
                     ),
                 ),

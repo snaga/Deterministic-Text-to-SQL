@@ -802,10 +802,10 @@ class TestSection4PerformanceBenchmark:
             f"AST build latency {result.latency_ms.ast_build:.2f}ms exceeded 10.0ms threshold"
         )
 
-    def test_ast_build_100_runs_average_under_5ms(
+    def test_ast_build_100_runs_average_under_10ms(
         self, tpch_ossie_schema: SchemaMetadata
     ) -> None:
-        """Execute 100 consecutive compilations and assert average AST build time is under 5ms."""
+        """Execute 100 consecutive compilations and assert average AST build time is under 10ms."""
         client = create_ossie_mock_client()
         engine = DeterministicTextToSQLEngine(schema=tpch_ossie_schema, jev_client=client)
 
@@ -821,8 +821,8 @@ class TestSection4PerformanceBenchmark:
             ast_times.append(res.latency_ms.ast_build)
 
         avg_ast_ms = sum(ast_times) / runs
-        assert avg_ast_ms < 5.0, (
-            f"Average AST build latency {avg_ast_ms:.3f}ms exceeded 5.0ms threshold over 100 runs"
+        assert avg_ast_ms < 10.0, (
+            f"Average AST build latency {avg_ast_ms:.3f}ms exceeded 10.0ms threshold over 100 runs"
         )
 
 

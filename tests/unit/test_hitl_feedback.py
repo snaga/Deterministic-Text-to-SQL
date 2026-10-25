@@ -242,6 +242,51 @@ class TestHITLManagerCheckAmbiguity:
         assert issue.options[1].clarification_text == "その他"
         assert "その他" in issue.options[1].label
 
+    def test_generic_ambiguity_no_duplicate_table_options(self) -> None:
+        """Verify fallback does not generate duplicate table options when primary == secondary.
+
+        When primary_table == secondary_table and a dimension is provided, it must prompt
+        for dimension clarification instead of showing duplicate tables (e.g. orders vs orders).
+        """
+        slots = ParsedSlots(
+            primary_table="orders",
+            secondary_table="orders",
+            dimension="o_orderstatus",
+            metric="count_records",
+            needs_clarification=True,
+            raw_response={"query": "注文ステータスごとに注文数を集計して"},
+        )
+        issue = HITLManager.check_ambiguity(slots, clarification=None)
+        assert issue is not None
+        assert "集計軸の確認" in issue.title
+        assert len(issue.options) == 2
+        assert issue.options[0].key == "A"
+        assert issue.options[0].clarification_text == "o_orderstatus"
+        assert issue.options[1].key == "B"
+        assert issue.options[1].clarification_text == "全体集計"
+        # Verify no duplicate table options exist
+        labels = [opt.label for opt in issue.options]
+        assert not any("主要テーブル: orders" in lbl for lbl in labels)
+        assert not any("関連テーブル: orders" in lbl for lbl in labels)
+
+        # When dimension is "none" and primary == secondary, Option B must fallback to "その他"
+        slots_no_dim = ParsedSlots(
+            primary_table="orders",
+            secondary_table="orders",
+            dimension="none",
+            metric="count_records",
+            needs_clarification=True,
+            raw_response={"query": "注文"},
+        )
+        issue_no_dim = HITLManager.check_ambiguity(slots_no_dim, clarification=None)
+        assert issue_no_dim is not None
+        assert "クエリ解釈の確認" in issue_no_dim.title
+        assert issue_no_dim.options[0].key == "A"
+        assert issue_no_dim.options[0].clarification_text == "orders"
+        assert issue_no_dim.options[1].key == "B"
+        assert issue_no_dim.options[1].clarification_text == "その他"
+        assert "その他" in issue_no_dim.options[1].label
+
     def test_no_issue_when_no_ambiguity(self) -> None:
         slots = ParsedSlots(
             primary_table="customer",
